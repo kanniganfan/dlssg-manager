@@ -14,7 +14,7 @@
 
 ---
 
-## 🙏 致谢与出处
+## 致谢与出处
 
 > **本项目的核心能力完全来自上游项目 [dlssg_for_sm86](https://github.com/sdli1995/dlssg_for_sm86)，由 [sdli1995](https://github.com/sdli1995) 开发维护。**
 >
@@ -30,7 +30,7 @@ DLSS 与 DLSS Frame Generation 是 NVIDIA Corporation 的商标与专有技术�
 
 ---
 
-## ✨ 这是什么
+## 这是什么
 
 DLSSG Manager 自动扫描本机已安装的 D3D12 游戏，定位真正的渲染 EXE，
 一键部署 / 一键恢复上游 DLSSG 代理与配置，让 RTX 20（SM75）/ RTX 30（SM86）
@@ -42,20 +42,20 @@ DLSSG Manager 自动扫描本机已安装的 D3D12 游戏，定位真正的渲�
 
 ### 特性一览
 
-- 🎮 **自动识别游戏**：Steam / Epic / GOG / Ubisoft 平台库 + 按盘符深度扫描 + 手动添加目录，
+- **自动识别游戏**：Steam / Epic / GOG / Ubisoft 平台库 + 按盘符深度扫描 + 手动添加目录，
   自动穿透启动器定位真正渲染 EXE，并识别 Unreal / Unity 引擎
-- ⚡ **一键启用 / 一键恢复**：入口 DLL 自动避让（version → winmm → dinput8 → winhttp → dxgi），
+- **一键启用 / 一键恢复**：入口 DLL 自动避让（version → winmm → dinput8 → winhttp → dxgi），
   绝不覆盖他人物件；部署带 SHA256 校验与自动备份，恢复还原如初
-- 🖥 **分辨率感知**：读取 UE / Unity 配置估算当前分辨率，给出显存增量预算（2X/3X/4X）
-- 🛡 **反作弊提示**：检测到反作弊系统时仅作提示，不影响任何功能使用
-- 🧩 **系统准备**：硬件加速 GPU 计划（HAGS）检测 + 一键开关 + 跳转系统设置，帧时间更稳
-- 🌐 **多语言**：简体中文 / 繁體中文 / English，跟随系统自动选择；
+- **分辨率感知**：读取 UE / Unity 配置估算当前分辨率，给出显存增量预算（2X/3X/4X）
+- **反作弊提示**：检测到反作弊系统时仅作提示，不影响任何功能使用
+- **系统准备**：硬件加速 GPU 计划（HAGS）检测 + 一键开关 + 跳转系统设置，帧时间更稳
+- **多语言**：简体中文 / 繁體中文 / English，跟随系统自动选择；
   社区可在 `lang/` 目录添加语言文件，无需重新打包
-- 🪟 **精致界面**：无边框圆角暗色 UI、KANNI 载入动画、macOS 风格三色窗口按钮、像素级文本省略
+- **精致界面**：无边框圆角暗色 UI、KANNI 载入动画、macOS 风格三色窗口按钮、像素级文本省略
 
 ---
 
-## 📥 下载与安装
+## 下载与安装
 
 前往 [**Releases**](../../releases) 页面下载对应版本（当前 **v1.1.0**）：
 
@@ -73,7 +73,7 @@ DLSSG Manager 自动扫描本机已安装的 D3D12 游戏，定位真正的渲�
 
 ---
 
-## 🚀 使用说明
+## 使用说明
 
 1. 启动后软件自动扫描本机游戏（也可点「深度扫描」按盘符全盘反查，或「手动添加游戏目录…」）；
 2. 左侧选中游戏，右侧确认识别结果（渲染进程、分辨率、反作弊提示、部署状态）；
@@ -94,7 +94,7 @@ DLSSG Manager 自动扫描本机已安装的 D3D12 游戏，定位真正的渲�
 
 ---
 
-## 🌐 多语言
+## 多语言
 
 界面语言在**标题栏右上角下拉框**切换（重启程序生效），首次启动跟随系统语言。
 新增语言：在程序目录新建 `lang/<语言代码>.json`（UTF-8，键为简体中文原文，值为译文，
@@ -103,7 +103,7 @@ DLSSG Manager 自动扫描本机已安装的 D3D12 游戏，定位真正的渲�
 
 ---
 
-## 🛠 从源码构建
+## 从源码构建
 
 ```bat
 git clone https://github.com/kanniganfan/dlssg-manager.git
@@ -127,7 +127,7 @@ scripts/   构建与维护脚本
 
 ---
 
-## ⚠️ 能力边界与免责声明
+## 能力边界与免责声明
 
 - 仅支持 **Windows x64 + D3D12** 游戏；Vulkan 暂不支持
 - 生成帧上限 3 帧（4X 请求）；不支持 6X / 动态倍率 / Reflex Warp
@@ -139,7 +139,7 @@ scripts/   构建与维护脚本
 
 ---
 
-## 📮 联系方式
+## 联系方式
 
 - 邮箱：[673100060@qq.com](mailto:673100060@qq.com)（GitHub 账号绑定邮箱）
 - 邮箱：[cylqm@qq.com](mailto:cylqm@qq.com)
@@ -149,7 +149,7 @@ scripts/   构建与维护脚本
 
 ---
 
-## 📄 License
+## License
 
 本项目代码以 [MIT License](LICENSE) 发布。
 payload/ 内的 DLSSG 运行库归上游 [dlssg_for_sm86](https://github.com/sdli1995/dlssg_for_sm86)
@@ -159,6 +159,6 @@ payload/ 内的 DLSSG 运行库归上游 [dlssg_for_sm86](https://github.com/sdl
 
 <div align="center">
 
-**Again, all credits to [sdli1995/dlssg_for_sm86](https://github.com/sdli1995/dlssg_for_sm86) 🙌**
+**Again, all credits to [sdli1995/dlssg_for_sm86](https://github.com/sdli1995/dlssg_for_sm86) **
 
 </div>
