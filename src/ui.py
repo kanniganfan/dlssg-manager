@@ -1213,6 +1213,8 @@ class MainWindow(QWidget):
 
         lay.addWidget(self._build_hags_card())
 
+        lay.addWidget(self._build_mask_card())
+
         self.list_area = QScrollArea()
         self.list_area.setWidgetResizable(True)
         holder = QWidget()
@@ -1241,6 +1243,152 @@ class MainWindow(QWidget):
         act = m.exec(QCursor.pos())
         if act:
             self.start_scan(True, [act.data()])
+
+    # ------------------------------------------------- 显卡伪装
+
+    def _build_mask_card(self) -> QWidget:
+        """显卡伪装卡片：选择型号 → 应用 / 还原。"""
+        card = QFrame()
+        card.setObjectName("hagsCard")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 11)
+        lay.setSpacing(8)
+
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        t = QLabel(tr('显卡伪装'))
+        t.setObjectName("cardTitle")
+        t.setStyleSheet("font-size:12px; font-weight:500;")
+        top.addWidget(t, 0)
+        top.addStretch(1)
+        self.mask_pill = Pill(tr('检测中'), "muted")
+        top.addWidget(self.mask_pill, 0)
+        lay.addLayout(top)
+
+        self.mask_desc = QLabel("")
+        self.mask_desc.setWordWrap(True)
+        self.mask_desc.setStyleSheet(f"font-size:11px; color:{C['dim']};")
+        lay.addWidget(self.mask_desc)
+
+        # 型号选择：前缀（40/50 系）+ 后缀（50/60/70/80/90 …）
+        sel = QHBoxLayout()
+        sel.setSpacing(6)
+        self.cmb_prefix = Combo()
+        self.cmb_prefix.setFixedHeight(32)
+        for p in core.MASK_PREFIXES:
+            self.cmb_prefix.addItem(tr(p), p)
+        sel.addWidget(self.cmb_prefix, 1)
+
+        self.cmb_suffix = Combo()
+        self.cmb_suffix.setFixedHeight(32)
+        for s in core.MASK_SUFFIXES:
+            self.cmb_suffix.addItem(tr(s), s)
+        sel.addWidget(self.cmb_suffix, 1)
+        lay.addLayout(sel)
+
+        # 自定义输入（留空则用上面的选择）
+        self.ed_mask_custom = QLineEdit()
+        self.ed_mask_custom.setObjectName("search")
+        self.ed_mask_custom.setPlaceholderText(tr('自定义型号（可选，如 RTX 4090）'))
+        self.ed_mask_custom.setToolTip(
+            tr('填了就优先用这里的型号；留空则用上方下拉框的选择'))
+        # 固定高度：侧栏竖向空间紧张时 QLineEdit 会被压成一条线
+        self.ed_mask_custom.setFixedHeight(32)
+        lay.addWidget(self.ed_mask_custom)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.btn_mask_apply = QPushButton(tr('应用伪装'))
+        self.btn_mask_apply.setObjectName("ghost")
+        self.btn_mask_apply.setFixedHeight(32)
+        self.btn_mask_apply.setCursor(Qt.PointingHandCursor)
+        self.btn_mask_apply.clicked.connect(self.apply_mask)
+        row.addWidget(self.btn_mask_apply, 1)
+
+        self.btn_mask_restore = QPushButton(tr('还原'))
+        self.btn_mask_restore.setObjectName("ghost")
+        self.btn_mask_restore.setFixedHeight(32)
+        self.btn_mask_restore.setCursor(Qt.PointingHandCursor)
+        self.btn_mask_restore.setToolTip(tr('恢复原始显卡名称，取消伪装'))
+        self.btn_mask_restore.clicked.connect(self.restore_mask)
+        row.addWidget(self.btn_mask_restore, 0)
+        lay.addLayout(row)
+
+        self.mask_tip = QLabel("")
+        self.mask_tip.setWordWrap(True)
+        self.mask_tip.setStyleSheet(f"font-size:11px; color:{C['warn']};")
+        self.mask_tip.setVisible(False)
+        lay.addWidget(self.mask_tip)
+
+        self._refresh_mask()
+        return card
+
+    def _refresh_mask(self) -> None:
+        info = core.detect_gpu_mask(force=True)
+        self.mask_info = info
+
+        if not info.supported:
+            self.mask_pill.set_kind(tr('不可用'), "muted")
+            self.mask_desc.setText(tr('本机不满足条件：{0}').format(info.reason))
+            self.btn_mask_apply.setEnabled(False)
+            self.btn_mask_restore.setEnabled(False)
+            self.mask_tip.setVisible(False)
+            return
+
+        if info.masked:
+            self.mask_pill.set_kind(tr('已伪装'), "warn")
+            self.mask_desc.setText(
+                tr('当前：{0}\n原始：{1}').format(info.current, info.original))
+        else:
+            self.mask_pill.set_kind(tr('未伪装'), "muted")
+            self.mask_desc.setText(tr('当前：{0}').format(info.current or tr('未知')))
+
+        # 还原按钮只在有原始记录时可用
+        self.btn_mask_restore.setEnabled(bool(info.original))
+
+        if not info.admin:
+            self.btn_mask_apply.setEnabled(False)
+            self.mask_tip.setVisible(True)
+            self.mask_tip.setText(
+                tr('当前非管理员运行，无法修改显卡注册表；请右键以管理员身份重新打开本程序。'))
+        else:
+            self.btn_mask_apply.setEnabled(True)
+            self.mask_tip.setVisible(info.masked)
+            if info.masked:
+                self.mask_tip.setText(tr('提示：修改后需重启电脑（或重启显卡驱动）才生效。'))
+
+    def _mask_choice(self) -> tuple[str, str]:
+        """取用户选择的型号。
+
+        自定义输入优先；支持三种写法：
+          - 纯数字 "4090"        -> RTX 4090
+          - 带系列 "RTX 4090"    -> RTX 4090
+          - 完整名 "NVIDIA ..."  -> 原样使用
+        留空则用下拉框的前缀 + 后缀。
+        """
+        custom = self.ed_mask_custom.text().strip()
+        if custom:
+            if custom.isdigit():
+                custom = f"RTX {custom}"
+            return "", custom
+        return self.cmb_prefix.currentData(), self.cmb_suffix.currentData()
+
+    def apply_mask(self) -> None:
+        prefix, suffix = self._mask_choice()
+        preview = core.build_mask_name(prefix, suffix) if prefix else suffix
+        if not preview or preview.endswith("GeForce"):
+            self.toast_msg(tr('请先选择或填写要伪装的显卡型号'), "warn")
+            return
+        ok, msg = core.apply_gpu_mask(prefix, suffix)
+        self._log((tr('[完成] {0}') if ok else tr('[错误] {0}')).format(msg))
+        self.toast_msg(msg, "ok" if ok else "bad")
+        self._refresh_mask()
+
+    def restore_mask(self) -> None:
+        ok, msg = core.restore_gpu_mask()
+        self._log((tr('[完成] {0}') if ok else tr('[错误] {0}')).format(msg))
+        self.toast_msg(msg, "ok" if ok else "bad")
+        self._refresh_mask()
 
     # ------------------------------------------------- 系统准备（HAGS）
 

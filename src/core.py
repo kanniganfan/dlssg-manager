@@ -27,7 +27,7 @@ import i18n
 from i18n import tr  # 多语言：中文字面量为源键，详见 i18n.py
 
 APP_NAME = "DLSSG Manager"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
 MOD_NAME = "DLSSG Native 0.2.4"
 
@@ -237,6 +237,7 @@ class HagsInfo:
 
 
 _HAGS_CACHE: HagsInfo | None = None
+_MASK_CACHE: "GpuMaskInfo | None" = None
 
 
 def _windows_build() -> int:
@@ -336,6 +337,237 @@ def hags_cli_text(info: HagsInfo | None = None) -> str:
     info = info or detect_hags(force=True)
     return (f"HAGS: {info.summary()} | value={info.value} | build={info.build} "
             f"| admin={info.admin} | supported={info.supported}")
+
+
+# ---------------------------------------------------------------- 显卡伪装
+#
+# 原理：Windows 显示适配器的「友好名称」存在注册表 Class 键下，游戏/DLSS 初始化
+# 时会读它来判断显卡型号。把 DriverDesc / AdapterString / ChipType 改成更高的型号
+# （如 RTX 4060），部分按型号白名单判断的游戏就会允许开启帧生成。
+#
+# 注意：
+# - 只改「名称字符串」，不动 MatchingDeviceId / 硬件 ID —— 驱动匹配不受影响；
+# - 必须管理员权限（HKLM）；
+# - 改完需重启（或重启显卡驱动）才生效；
+# - 原值保存在 state.json 里，可一键还原。
+
+GPU_CLASS_KEY = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+GPU_NAME_VALUES = ("DriverDesc", "HardwareInformation.AdapterString",
+                   "HardwareInformation.ChipType")
+
+# 伪装前缀（默认 40/50 系）
+MASK_PREFIXES = ["RTX 40", "RTX 50"]
+# 后缀档位
+MASK_SUFFIXES = ["50", "50 Ti", "60", "60 Ti", "70", "70 Ti", "80", "80 Ti", "90", "90 Ti"]
+
+
+@dataclass
+class GpuMaskInfo:
+    """显卡伪装状态。"""
+
+    supported: bool = True
+    admin: bool = False
+    adapter_key: str = ""          # 注册表子键，如 ...\0000
+    original: str = ""             # 原始显卡名
+    current: str = ""              # 当前注册表里的名字
+    masked: bool = False           # 是否处于伪装状态
+    reason: str = ""               # 不可用原因
+
+
+def _gpu_class_subkeys() -> list[str]:
+    """列出 Class 下的数字子键（0000/0001…），失败返回空。"""
+    out: list[str] = []
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, GPU_CLASS_KEY) as k:
+            for i in range(winreg.QueryInfoKey(k)[0]):
+                sub = winreg.EnumKey(k, i)
+                if sub.isdigit():
+                    out.append(sub)
+    except Exception:
+        pass
+    return out
+
+
+def _find_nvidia_subkey() -> str:
+    """找到 NVIDIA 显卡所在的 Class 子键。"""
+    for sub in _gpu_class_subkeys():
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                f"{GPU_CLASS_KEY}\\{sub}") as k:
+                desc = str(winreg.QueryValueEx(k, "DriverDesc")[0])
+                prov = str(winreg.QueryValueEx(k, "ProviderName")[0]) \
+                    if _has_value(k, "ProviderName") else ""
+            if "nvidia" in desc.lower() or "nvidia" in prov.lower():
+                return sub
+        except Exception:
+            continue
+    return ""
+
+
+def _has_value(key, name: str) -> bool:
+    try:
+        winreg.QueryValueEx(key, name)
+        return True
+    except Exception:
+        return False
+
+
+def _read_gpu_names(sub: str) -> dict[str, str]:
+    """读取子键下的三个名称值。"""
+    vals: dict[str, str] = {}
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            f"{GPU_CLASS_KEY}\\{sub}") as k:
+            for n in GPU_NAME_VALUES:
+                try:
+                    v = winreg.QueryValueEx(k, n)[0]
+                    vals[n] = v if isinstance(v, str) else str(v)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return vals
+
+
+def detect_gpu_mask(force: bool = False) -> GpuMaskInfo:
+    """检测当前显卡伪装状态。"""
+    global _MASK_CACHE
+    if _MASK_CACHE is not None and not force:
+        return _MASK_CACHE
+
+    info = GpuMaskInfo()
+    info.admin = is_admin()
+    if os.name != "nt":
+        info.supported = False
+        info.reason = tr('非 Windows 系统')
+        _MASK_CACHE = info
+        return info
+
+    sub = _find_nvidia_subkey()
+    if not sub:
+        info.supported = False
+        info.reason = tr('未找到 NVIDIA 显卡的注册表项')
+        _MASK_CACHE = info
+        return info
+
+    info.adapter_key = sub
+    names = _read_gpu_names(sub)
+    info.current = names.get("DriverDesc", "")
+
+    # 原始名称从 state 读取；state 里没有说明从未伪装过，当前名即原始名
+    st = load_state()
+    rec = st.get("gpu_mask") or {}
+    info.original = rec.get("original") or info.current
+    info.masked = bool(rec.get("masked")) and bool(rec.get("original"))
+
+    # 交叉校验：当前名与记录不符，说明被外部改过
+    if info.masked and info.current and info.original \
+            and info.current == info.original:
+        # 记录说伪装了但名字是原始的 -> 可能已手动还原
+        info.masked = False
+    _MASK_CACHE = info
+    return info
+
+
+def build_mask_name(prefix: str, suffix: str) -> str:
+    """拼出伪装名称。
+
+    支持：
+      ("RTX 40", "60")      -> NVIDIA GeForce RTX 4060
+      ("RTX 50", "80 Ti")   -> NVIDIA GeForce RTX 5080 Ti
+      ("", "4090")          -> NVIDIA GeForce RTX 4090   （纯数字自动补 RTX）
+      ("", "RTX 4090")      -> NVIDIA GeForce RTX 4090
+      ("", "NVIDIA ...")    -> 原样使用
+    """
+    prefix = (prefix or "").strip()
+    suffix = (suffix or "").strip()
+    if not prefix and not suffix:
+        return ""
+    core_name = f"{prefix}{suffix}".replace("  ", " ").strip()
+    if not core_name:
+        return ""
+    up = core_name.upper()
+    if up.startswith("NVIDIA"):
+        return core_name
+    if up.startswith("GEFORCE"):
+        return f"NVIDIA {core_name}"
+    # 纯数字或形如 "4090 Ti" 的后缀 -> 补 RTX
+    if core_name[0].isdigit() or up.startswith("RTX"):
+        core_name = core_name if up.startswith("RTX") else f"RTX {core_name}"
+    return f"NVIDIA GeForce {core_name}"
+
+
+def apply_gpu_mask(prefix: str, suffix: str) -> tuple[bool, str]:
+    """写入伪装名称。返回 (是否成功, 说明)。"""
+    if os.name != "nt":
+        return False, tr('非 Windows 系统，无法设置')
+    new_name = build_mask_name(prefix, suffix)
+    if not new_name or new_name.endswith("GeForce"):
+        return False, tr('请先选择要伪装的显卡型号')
+
+    info = detect_gpu_mask(force=True)
+    if not info.supported or not info.adapter_key:
+        return False, info.reason or tr('未找到 NVIDIA 显卡的注册表项')
+
+    st = load_state()
+    rec = st.get("gpu_mask") or {}
+    # 首次伪装时记下原始名；已伪装过则沿用最初的原始名
+    original = rec.get("original") or info.current
+    if not original:
+        return False, tr('无法读取当前显卡名称')
+
+    key = f"{GPU_CLASS_KEY}\\{info.adapter_key}"
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key, 0,
+                            winreg.KEY_SET_VALUE) as k:
+            for n in GPU_NAME_VALUES:
+                winreg.SetValueEx(k, n, 0, winreg.REG_SZ, new_name)
+        st["gpu_mask"] = {"original": original, "masked": True,
+                          "name": new_name, "prefix": prefix, "suffix": suffix}
+        save_state(st)
+        detect_gpu_mask(force=True)
+        return True, tr('已伪装为 {0}（原 {1}），重启电脑后生效').format(new_name, original)
+    except PermissionError:
+        return False, tr('需要管理员权限才能修改显卡注册表')
+    except Exception as e:
+        return False, tr('写入失败：{0}: {1}').format(type(e).__name__, e)
+
+
+def restore_gpu_mask() -> tuple[bool, str]:
+    """还原原始显卡名称。"""
+    if os.name != "nt":
+        return False, tr('非 Windows 系统，无法设置')
+    info = detect_gpu_mask(force=True)
+    if not info.supported or not info.adapter_key:
+        return False, info.reason or tr('未找到 NVIDIA 显卡的注册表项')
+
+    st = load_state()
+    rec = st.get("gpu_mask") or {}
+    original = rec.get("original") or ""
+    if not original:
+        return False, tr('没有可还原的原始显卡名称记录')
+
+    key = f"{GPU_CLASS_KEY}\\{info.adapter_key}"
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key, 0,
+                            winreg.KEY_SET_VALUE) as k:
+            for n in GPU_NAME_VALUES:
+                winreg.SetValueEx(k, n, 0, winreg.REG_SZ, original)
+        st["gpu_mask"] = {"original": original, "masked": False}
+        save_state(st)
+        detect_gpu_mask(force=True)
+        return True, tr('已还原为 {0}，重启电脑后生效').format(original)
+    except PermissionError:
+        return False, tr('需要管理员权限才能修改显卡注册表')
+    except Exception as e:
+        return False, tr('还原失败：{0}: {1}').format(type(e).__name__, e)
+
+
+def gpu_mask_cli_text(info: GpuMaskInfo | None = None) -> str:
+    info = info or detect_gpu_mask(force=True)
+    return (f"GPU_MASK: supported={info.supported} admin={info.admin} "
+            f"masked={info.masked} current={info.current!r} "
+            f"original={info.original!r} key={info.adapter_key!r}")
 
 
 # ---------------------------------------------------------------- 显卡探测

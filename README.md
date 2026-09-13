@@ -6,7 +6,7 @@
 
 简体中文 · 繁體中文 · English
 
-[![Release](https://img.shields.io/badge/Release-v1.1.0-5B8CFF)](#-下载与安装)
+[![Release](https://img.shields.io/badge/Release-v1.2.0-5B8CFF)](#-下载与安装)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-333D52)](#-下载与安装)
 [![Upstream](https://img.shields.io/badge/Upstream-dlssg__for__sm86-9B7BFF)](#-致谢与出处)
 
@@ -70,6 +70,8 @@ DLSSG Manager 自动扫描本机已安装的 D3D12 游戏，定位真正的渲�
 - **分辨率感知**：读取 UE / Unity 配置估算当前分辨率，给出显存增量预算（2X/3X/4X）
 - **反作弊提示**：检测到反作弊系统时仅作提示，不影响任何功能使用
 - **系统准备**：硬件加速 GPU 计划（HAGS）检测 + 一键开关 + 跳转系统设置，帧时间更稳
+- **显卡伪装**：把显卡名称伪装成 RTX 40 / 50 系（50 / 60 / 70 / 80 / 90 及 Ti 档位），
+  绕过部分游戏按型号判断的限制，让老卡也能开启帧生成；支持自定义型号，随时一键还原
 - **多语言**：简体中文 / 繁體中文 / English，跟随系统自动选择；
   社区可在 `lang/` 目录添加语言文件，无需重新打包
 - **精致界面**：无边框圆角暗色 UI、KANNI 载入动画、macOS 风格三色窗口按钮、像素级文本省略
@@ -78,12 +80,12 @@ DLSSG Manager 自动扫描本机已安装的 D3D12 游戏，定位真正的渲�
 
 ## 下载与安装
 
-前往 [**Releases**](../../releases) 页面下载对应版本（当前 **v1.1.0**）：
+前往 [**Releases**](../../releases) 页面下载对应版本（当前 **v1.2.0**）：
 
 | 版本 | 文件 | 适合人群 |
 |---|---|---|
-| **免安装便携版** | `DLSSG_Manager_1.1.0_portable_x64.zip` | 想即解压即用、绿色不写注册表 |
-| **标准安装版** | `DLSSG_Manager_1.1.0_setup_x64.exe` | 想要安装向导、开始菜单/桌面快捷方式与完整卸载 |
+| **免安装便携版** | `DLSSG_Manager_1.2.0_portable_x64.zip` | 想即解压即用、绿色不写注册表 |
+| **标准安装版** | `DLSSG_Manager_1.2.0_setup_x64.exe` | 想要安装向导、开始菜单/桌面快捷方式与完整卸载 |
 
 **便携版**：解压到任意目录，双击 `DLSSG Manager.exe` 即可。
 **安装版**：双击 setup，按向导选择目录安装；卸载请到「设置 → 应用 → 安装的应用」或
