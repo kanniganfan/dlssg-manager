@@ -141,6 +141,7 @@ scripts/   构建与维护脚本
 
 ## 📮 联系方式
 
+- 邮箱：[673100060@qq.com](mailto:673100060@qq.com)（GitHub 账号绑定邮箱）
 - 邮箱：[cylqm@qq.com](mailto:cylqm@qq.com)
 - 邮箱：[cao673100060@gmail.com](mailto:cao673100060@gmail.com)
 
