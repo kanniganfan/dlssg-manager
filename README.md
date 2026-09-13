@@ -106,7 +106,7 @@ DLSSG Manager 自动扫描本机已安装的 D3D12 游戏，定位真正的渲�
 ## 🛠 从源码构建
 
 ```bat
-git clone https://github.com/<你的用户名>/dlssg-manager.git
+git clone https://github.com/kanniganfan/dlssg-manager.git
 cd dlssg-manager
 scripts\build_windows.bat
 ```

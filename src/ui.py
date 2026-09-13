@@ -806,16 +806,13 @@ class MainWindow(QWidget):
         self.resize(1120, 720)
         if not shot_mode:
             self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
-            # 根因性修复：WA_TranslucentBackground 的分层窗口在本机驱动/DWM
-            # 组合下会残留陈旧瓦片 —— 表现为「文字被遮挡/显示不完整，
-            # 移动或点击后才恢复」。改为不透明窗口后不再走逐像素合成，
-            # 这一类问题从根上消失。外圈 20px 由 paintEvent 画成深色背板，
-            # root 仍是圆角卡片，观感不变。
-            self.setAttribute(Qt.WA_TranslucentBackground, False)
-            self.setAutoFillBackground(True)
-            pal = self.palette()
-            pal.setColor(self.backgroundRole(), QColor("#05070B"))
-            self.setPalette(pal)
+            # 半透明分层窗口：外圈 20px 边距真正透明，四周圆角由 RootFrame 画出。
+            # 历史上它有过「残影/文字遮挡」问题，但根因其实是 ①ElidedLabel 之前的
+            # 字符数截断、②kv 标签被压缩到 10-11px 两类真实布局缺陷 + 少量 DWM
+            # 陈旧瓦片。①② 已根治（像素级省略 + 高度锁），重绘守卫见 changeEvent /
+            # _repaint_all —— 因此这里恢复半透明以找回圆角，不再牺牲观感。
+            self.setAttribute(Qt.WA_TranslucentBackground)
+            self.setAttribute(Qt.WA_NoSystemBackground, True)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0 if shot_mode else 20, 0 if shot_mode else 20,
@@ -972,13 +969,17 @@ class MainWindow(QWidget):
             if w.isVisible():
                 w.update()
         self.repaint()
+        # DWM 对分层窗口的合成可能晚于 Qt 完成重绘，追加两级延迟补绘
+        # （内容不变的 repaint 没有视觉开销，但能把迟到的陈旧瓦片压掉）
+        QTimer.singleShot(150, self.update)
+        QTimer.singleShot(450, self.update)
 
-    def paintEvent(self, e) -> None:
-        """不透明窗口的外圈背板（root 之外的 20px 边距区）。"""
-        super().paintEvent(e)
-        p = QPainter(self)
-        p.fillRect(self.rect(), QColor("#05070B"))
-        p.end()
+    def changeEvent(self, e) -> None:
+        """激活/最大化等状态变化时立即整窗补绘：
+        半透明窗口的状态切换是残影高发点，也让最大化后的直角重画即时生效。"""
+        super().changeEvent(e)
+        if e.type() in (QEvent.Type.ActivationChange, QEvent.Type.WindowStateChange):
+            QTimer.singleShot(0, self._repaint_all)
 
     def showEvent(self, e) -> None:
         super().showEvent(e)
