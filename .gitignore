@@ -1,0 +1,33 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ---- 构建产物（发布时作为 Release 附件，不入库）----
+build/
+dist/
+*.spec
+payload/
+_stage/
+
+# ---- 打包器输出 ----
+*.exe
+!docs/**/*.exe
+
+# ---- 二进制大文件 ----
+*.dll
+
+# ---- 备份与临时 ----
+*.bak
+*.tmp
+*_backup/
+_tools/
+*.log
+
+# ---- 编辑器 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
