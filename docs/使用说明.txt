@@ -1,7 +1,7 @@
 DLSSG Manager 1.0.0 — 使用说明
 ================================================================
 为 NVIDIA RTX 20 / 30 系显卡解锁 DLSS 帧生成（DLSS-G）
-底层为开源项目 DLSSG Native 0.2.4：https://github.com/sdli1995/dlssg_for_sm86
+底层为开源项目 DLSSG SM86 0.3.0：https://github.com/sdli1995/dlssg_for_sm86
 
 
 一、这是什么

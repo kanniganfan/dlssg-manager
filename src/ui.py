@@ -1172,7 +1172,7 @@ class MainWindow(QWidget):
 
         self.gpu_pill = Pill(tr('路由 {0}').format(self.gpu.route), "info" if self.gpu.supported else "warn")
         lay.addWidget(self.gpu_pill)
-        lay.addWidget(Pill(tr('SM86 / SM75 内核'), "purple"))
+        lay.addWidget(Pill(tr('SM86 内核 · 0.3.0'), "purple"))
         return w
 
     # ------------------------------------------------- 左侧列表
@@ -1616,7 +1616,7 @@ class MainWindow(QWidget):
         a.setMinimumWidth(max(66, a.sizeHint().width()))
         r1.addWidget(a)
         self.cmb_router = Combo()
-        self.cmb_router.addItems([tr('自动（推荐）'), tr('SM86 · RTX 30 系'), tr('SM75 · RTX 20 系')])
+        self.cmb_router.addItems([tr('自动（推荐）'), tr('SM86 · RTX 30 系'), tr('SM75 · RTX 20 系（0.3.0 不支持）')])
         self.cmb_router.setFixedWidth(224)
         r1.addWidget(self.cmb_router)
         r1.addSpacing(14)
@@ -1637,19 +1637,9 @@ class MainWindow(QWidget):
         c.setObjectName("kv")
         c.setMinimumWidth(max(66, c.sizeHint().width()))
         r2.addWidget(c)
-        self.seg_mult = Segmented(["2X", "3X", "4X"], 2)
+        self.seg_mult = Segmented(["2X", "3X", "4X", "5X", "6X"], 0)
         self.seg_mult.changed.connect(lambda _i: self._update_vram())
         r2.addWidget(self.seg_mult)
-        r2.addSpacing(14)
-        d = QLabel(tr('采样模式'))
-        d.setObjectName("kv")
-        d.setMinimumWidth(max(66, d.sizeHint().width()))
-        r2.addWidget(d)
-        self.sw_bilinear = Switch(False)
-        r2.addWidget(self.sw_bilinear)
-        self.lbl_bilinear = QLabel(tr('精确（默认）'))
-        self.lbl_bilinear.setObjectName("kv")
-        r2.addWidget(self.lbl_bilinear)
         r2.addStretch(1)
         e2 = QLabel(tr('诊断日志'))
         e2.setObjectName("kv")
@@ -1658,8 +1648,6 @@ class MainWindow(QWidget):
         self.sw_log = Switch(False)
         r2.addWidget(self.sw_log)
         cl.addLayout(r2)
-        self.sw_bilinear.toggled.connect(
-            lambda on: self.lbl_bilinear.setText(tr('近似（更快）') if on else tr('精确（默认）')))
         lay.addWidget(cfg)
 
         actions = QHBoxLayout()
@@ -1846,13 +1834,9 @@ class MainWindow(QWidget):
                 self.kv_state.set(tr('已部署 {0}（Router={1}）').format(g.entry, cfg.get('Router', '?')))
             else:
                 self.kv_state.set(tr('已部署 {0}').format(g.entry))
-            if cfg.get("Router") == "SM75":
-                self.cmb_router.setCurrentIndex(2)
-            elif cfg.get("Router") == "SM86":
-                self.cmb_router.setCurrentIndex(1)
-            m = int(cfg.get("MaxGeneratedFrames", "3") or 3)
-            self.seg_mult.set_value({1: 0, 2: 1, 3: 2}.get(m, 2))
-            self.sw_bilinear.setChecked(cfg.get("HardwareBilinear") == "1")
+            # 0.3.0 ini 无 Router/双线性键；MaxGeneratedFrames 新旧格式同名，兼容读取
+            m = int(cfg.get("MaxGeneratedFrames", "1") or 1)
+            self.seg_mult.set_value({1: 0, 2: 1, 3: 2, 4: 3, 5: 4}.get(m, 0))
             if cfg.get("Level") == "2":
                 self.sw_log.setChecked(True)
         else:
@@ -1872,7 +1856,7 @@ class MainWindow(QWidget):
         return {0: self.gpu.route, 1: "SM86", 2: "SM75"}[i]
 
     def _mult(self) -> int:
-        return {0: 2, 1: 3, 2: 4}.get(self.seg_mult.value(), 4)
+        return {0: 2, 1: 3, 2: 4, 3: 5, 4: 6}.get(self.seg_mult.value(), 2)
 
     def _update_vram(self) -> None:
         g = self.current
@@ -1900,7 +1884,7 @@ class MainWindow(QWidget):
         self.btn_install.setEnabled(False)
         self.status.setText(tr('正在部署…'))
         self.kw = ActionWorker(core.deploy, g, self._router(), self._mult(),
-                               self.sw_bilinear.isChecked(), 2 if self.sw_log.isChecked() else 1,
+                               False, 2 if self.sw_log.isChecked() else 1,
                                self._entry())
         self.kw.done.connect(self._on_install_done)
         self.kw.start()

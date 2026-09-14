@@ -27,9 +27,9 @@ import i18n
 from i18n import tr  # 多语言：中文字面量为源键，详见 i18n.py
 
 APP_NAME = "DLSSG Manager"
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
-MOD_NAME = "DLSSG Native 0.2.4"
+MOD_NAME = "DLSSG SM86 0.3.0"
 
 INI_NAME = "dlssg_sm86.ini"
 LOG_DIR_NAME = "dlssg_sm86"
@@ -37,19 +37,31 @@ LOG_DIR_NAME = "dlssg_sm86"
 # 入口 DLL：(内部键, 部署文件名, 包内相对路径, 说明)
 ENTRIES = [
     ("version", "version.dll", "version.dll", '默认入口'),
-    ("winmm", "winmm.dll", "altnative/winmm.dll", '备用入口'),
-    ("dinput8", "dinput8.dll", "altnative/dinput8.dll", '备用入口'),
-    ("winhttp", "winhttp.dll", "altnative/winhttp.dll", '备用入口'),
-    ("dxgi", "dxgi.dll", "altnative/dxgi.dll", '备用入口'),
+    ("winmm", "winmm.dll", "alternatives/winmm.dll", '备用入口'),
+    ("dinput8", "dinput8.dll", "alternatives/dinput8.dll", '备用入口'),
+    ("dxgi", "dxgi.dll", "alternatives/dxgi.dll", '备用入口'),
+    ("d3d12", "d3d12.dll", "alternatives/d3d12.dll", '备用入口'),
+    ("dbghelp", "dbghelp.dll", "alternatives/dbghelp.dll", '备用入口'),
 ]
 
 # 运行包内文件校验和（与 GitHub 仓库 main 分支一致）
-PAYLOAD_SHA256 = {
+# 旧版本（0.2.4 native 模式）的入口哈希：用于识别"本项目历史部署"，
+# 升级部署时允许直接覆盖，而不是误判为第三方文件跳到其它入口。
+PAYLOAD_SHA256_LEGACY = {
     "version.dll": "c844646d835a7b88ed1382eea80403d38b433f8ac09cf92581c73698c44ae7c2",
     "altnative/winmm.dll": "1004dd4ee0edbe4e1af4c8c7b30d4786bea0f5e7c0412566996b4c2543ae7e36",
     "altnative/dinput8.dll": "ef3c3d49c5b5c8a17289c24da9b22885570793d72f3db628fa500f9efdb20489",
     "altnative/winhttp.dll": "1619839e4d1b6145ce9a587ba807f42e64f2b0984af9e81700d42ccf46ff7253",
     "altnative/dxgi.dll": "8d29eddbd7f1c3e272d07f94ab8812a80ef5b7aeb73923320bf9a432ddcf74c0",
+}
+
+PAYLOAD_SHA256 = {
+    "version.dll": "a22d2453f25d7df3fdc0d6d683c21f01769a115439d58f1341183a75faaf8c7d",
+    "alternatives/winmm.dll": "197f97e90541ae688d291ef388b1eddc0c55cb657603eb55dea2d3d178b1e384",
+    "alternatives/dinput8.dll": "01fdd5e77e64045400a2e7b6f35f98f3403335e30cd9def0e996f78240aa65da",
+    "alternatives/dxgi.dll": "ae37150fe056f3388571481ad4aaf78fad720e9b52eb7e6e1e9d2dff85df841e",
+    "alternatives/d3d12.dll": "63e7c3a1ba0b10e37e1a162ccf3aa2e19a0f7359de63787585c09baffd67ad45",
+    "alternatives/dbghelp.dll": "10e2fe2d84b8b674e184891ca5211b01c43c6700e1c8b8c6d4969286f653bff8",
 }
 
 # 排除的 EXE 关键字：启动器、反作弊、安装器、录制工具、崩溃上报等，不是真正渲染进程
@@ -1181,22 +1193,36 @@ def entry_of_deployment(exe_dir: str) -> tuple[str, bool]:
 # ---------------------------------------------------------------- 部署 / 恢复
 
 def build_ini(router: str, mult: int, bilinear: bool, level: int) -> str:
+    """生成 dlssg_sm86.ini（上游 0.3.0 代理模式格式）。
+
+    router / bilinear 参数保留以兼容调用方，但 0.3.0 的 ini 不再包含
+    Router / KernelImage / HardwareBilinear（native 模式的键，已废弃）；
+    运行库与 SM86 后端内嵌在代理 DLL 中，见上游 0.3.0 README。
+    mult: 期望倍率 2~6，ini 值 = mult-1（5 = 6X 上限，由运行库钳制）。
+    """
+    mult = max(2, min(6, int(mult or 2)))
     return (
-        f"; {MOD_NAME} - 由 {APP_NAME} {APP_VERSION} 生成\r\n"
+        f"; DLSSG SM86 0.3.0 - 由 {APP_NAME} {APP_VERSION} 生成\r\n"
         "; 修改后需要重启游戏才会生效。\r\n"
-        "[Compatibility]\r\n"
-        "; SM86 = Ampere (RTX 30 系)；SM75 = Turing (RTX 20/16 系)\r\n"
-        f"Router={router}\r\n"
-        "; PTX 由驱动 JIT，兼容性最好；Cubin 需要 GPU 与 Router 精确匹配。\r\n"
-        "KernelImage=PTX\r\n"
-        "; 0 = 精确输出（默认）；1 = 近似硬件双线性采样，仅 SM86 生效。\r\n"
-        f"HardwareBilinear={1 if bilinear else 0}\r\n"
+        "[General]\r\n"
+        "; 1 = 启用帧生成（内嵌 Ampere 优化版 DLSS-G 运行库）；0 = 关闭（游戏自带 DLSS-G 原样加载）。\r\n"
+        "Enabled=1\r\n"
         "\r\n[FrameGeneration]\r\n"
-        "; 上限：1=2X, 2=3X, 3=4X，实际倍率由游戏请求决定。\r\n"
-        f"MaxGeneratedFrames={max(1, min(3, mult - 1))}\r\n"
+        "; 1 = 最优内核（推荐，输出与原厂逐位一致，离线基准快 19~32%）；0 = 原厂内核。\r\n"
+        "Optimized=1\r\n"
+        "; 生成帧上限：5 = 最高 6X，3 = 最高 4X。实际倍率由游戏请求并钳到运行库支持范围。\r\n"
+        f"MaxGeneratedFrames={mult - 1}\r\n"
+        "\r\n[Compatibility]\r\n"
+        "; DLSS-G 渲染预设（UI 重组），Auto = 由游戏/驱动配置决定（默认）；A = 强制关；B = 强制开。\r\n"
+        "Preset=Auto\r\n"
         "\r\n[Logging]\r\n"
-        "; 0=关闭, 1=仅错误, 2=诊断, 3=详细。\r\n"
+        "; 0=关闭, 1=仅错误, 2=配置与能力, 3=内核与求值轨迹。写入下方 Directory。\r\n"
         f"Level={level}\r\n"
+        "Directory=dlssg_sm86\\logs\r\n"
+        "\r\n[Runtime]\r\n"
+        "; Bundled = 始终使用内嵌的配套运行库与后端（常规用法）。\r\n"
+        "Mode=Bundled\r\n"
+        "CacheDirectory=\r\n"
     )
 
 
@@ -1242,6 +1268,11 @@ def _entry_filename(name: str) -> str:
     return n if n.endswith(".dll") else ""
 
 
+def _all_known_hashes() -> set[str]:
+    """当前 payload 与历史版本的入口哈希合集（识别本项目部署）。"""
+    return set(PAYLOAD_SHA256.values()) | set(PAYLOAD_SHA256_LEGACY.values())
+
+
 def pick_entry(exe_dir: str, prefer: str = "") -> tuple[str, str]:
     """挑一个可用入口：目标名已被别的程序占用时跳过，避免覆盖他人文件。"""
     order = [e[1] for e in ENTRIES]
@@ -1252,11 +1283,11 @@ def pick_entry(exe_dir: str, prefer: str = "") -> tuple[str, str]:
         if not target.exists():
             return fname, ""
         try:
-            if sha256(target) in set(PAYLOAD_SHA256.values()):
-                return fname, ""  # 本项目旧部署，可直接覆盖
+            if sha256(target) in _all_known_hashes():
+                return fname, ""  # 本项目当前/历史部署，可直接覆盖
         except OSError:
             pass
-    return "", tr('五种入口名均已被其他程序占用，可在“高级”里手动指定')
+    return "", tr('六种入口名均已被其他程序占用，可在“高级”里手动指定')
 
 
 def _is_running(exe_path: str) -> bool:
@@ -1270,6 +1301,9 @@ def _is_running(exe_path: str) -> bool:
 def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
            prefer_entry: str = "", force: bool = False) -> tuple[bool, list[str]]:
     logs: list[str] = []
+    if str(router).upper() == "SM75":
+        return False, [tr('[错误] 上游 0.3.0 起出厂配置仅覆盖 RTX 30 系（SM86）；'
+                          'RTX 20 系的实验性 SM75 路由请使用旧版工具 v1.2.0（payload 0.2.4）。')]
     exe_dir = Path(game.exe_dir)
     if not exe_dir.is_dir():
         return False, [tr('[错误] 目录不存在：{0}').format(exe_dir)]
@@ -1313,7 +1347,7 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
     try:
         if target.exists():
             cur = sha256(target)
-            if cur not in set(PAYLOAD_SHA256.values()):
+            if cur not in _all_known_hashes():
                 bak = bdir / (entry + ".bak")
                 shutil.copy2(target, bak)
                 rec.setdefault("backups", {})[entry] = str(bak)
@@ -1330,8 +1364,8 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
         logs.append(tr('[校验] SHA256 {0}… 与运行包一致：{1}').format(new_hash[:20], new_hash == sha256(src)))
 
         ini_path.write_text(build_ini(router, mult, bilinear, level), encoding="utf-8")
-        logs.append(f"[配置] {INI_NAME}：Router={router}，MaxGeneratedFrames="
-                    f"{max(1, min(3, mult - 1))}（{mult}X），HardwareBilinear={1 if bilinear else 0}")
+        logs.append(f"[配置] {INI_NAME}：Optimized=1，MaxGeneratedFrames="
+                    f"{max(1, min(5, int(mult) - 1))}（最高 {max(2, min(6, int(mult)))}X），Preset=Auto")
     except PermissionError as e:
         return False, logs + [tr('[错误] 权限不足或被占用：{0}').format(e),
                               tr('[提示] 以管理员身份运行本程序，并确认游戏已完全退出')]
@@ -1341,12 +1375,12 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
     rec.update({
         "name": game.name, "exe_dir": str(exe_dir), "exe": game.exe, "entry": entry,
         "dll_sha256": sha256(target), "installed_at": time.time(), "router": router,
-        "mult": mult, "bilinear": bool(bilinear), "level": level,
+        "mult": mult, "level": level,
         "source": game.source, "engine": game.engine, "dlssg": game.dlssg,
     })
     st["games"][key] = rec
     save_state(st)
-    logs.append(tr('[完成] 已启用。重启游戏后进入画面设置，打开“帧生成”并选 2X/3X/4X'))
+    logs.append(tr('[完成] 已启用。重启游戏后进入画面设置，打开“帧生成”并选择倍率（游戏支持动态插帧时最高可选 6X）'))
     return True, logs
 
 
@@ -1420,7 +1454,8 @@ def read_deployed_config(exe_dir: str) -> dict:
         return {}
     txt = read_text(f)
     cfg = {}
-    for k in ("Router", "KernelImage", "HardwareBilinear", "MaxGeneratedFrames", "Level"):
+    for k in ("Router", "KernelImage", "HardwareBilinear", "MaxGeneratedFrames", "Level",
+              "Enabled", "Optimized", "Preset"):
         m = re.search(rf"^{k}\s*=\s*(\S+)", txt, re.M)
         if m:
             cfg[k] = m.group(1)
