@@ -845,6 +845,8 @@ class MainWindow(QWidget):
 
         root_lay.addWidget(self._build_titlebar())
         root_lay.addWidget(self._build_gpu_bar())
+        # 系统准备 + 显卡伪装：横向系统栏，不再占用左侧游戏列表空间
+        root_lay.addWidget(self._build_sys_bar())
 
         body = QHBoxLayout()
         body.setSpacing(12)
@@ -1227,10 +1229,6 @@ class MainWindow(QWidget):
         self.count.setObjectName("sectionLabel")
         lay.addWidget(self.count)
 
-        lay.addWidget(self._build_hags_card())
-
-        lay.addWidget(self._build_mask_card())
-
         self.list_area = QScrollArea()
         self.list_area.setWidgetResizable(True)
         holder = QWidget()
@@ -1263,63 +1261,59 @@ class MainWindow(QWidget):
     # ------------------------------------------------- 显卡伪装
 
     def _build_mask_card(self) -> QWidget:
-        """显卡伪装卡片：选择型号 → 应用 / 还原。"""
+        """显卡伪装卡片（横向紧凑）：型号选择 → 应用 / 还原。"""
         card = QFrame()
         card.setObjectName("hagsCard")
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(12, 10, 12, 11)
-        lay.setSpacing(8)
+        lay = QHBoxLayout(card)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(10)
 
-        top = QHBoxLayout()
-        top.setSpacing(8)
+        # 标题 + 状态
+        col = QVBoxLayout()
+        col.setSpacing(2)
         t = QLabel(tr('显卡伪装'))
         t.setObjectName("cardTitle")
         t.setStyleSheet("font-size:12px; font-weight:500;")
-        top.addWidget(t, 0)
-        top.addStretch(1)
-        self.mask_pill = Pill(tr('检测中'), "muted")
-        top.addWidget(self.mask_pill, 0)
-        lay.addLayout(top)
-
+        col.addWidget(t)
         self.mask_desc = QLabel("")
-        self.mask_desc.setWordWrap(True)
         self.mask_desc.setStyleSheet(f"font-size:11px; color:{C['dim']};")
-        lay.addWidget(self.mask_desc)
+        col.addWidget(self.mask_desc)
+        lay.addLayout(col, 1)
 
-        # 型号选择：前缀（40/50 系）+ 后缀（50/60/70/80/90 …）
-        sel = QHBoxLayout()
-        sel.setSpacing(6)
+        self.mask_pill = Pill(tr('检测中'), "muted")
+        lay.addWidget(self.mask_pill, 0)
+
+        # 型号选择：前缀（40/50 系）+ 后缀（50/60/70/80/90 及 Ti）
         self.cmb_prefix = Combo()
         self.cmb_prefix.setFixedHeight(32)
+        self.cmb_prefix.setFixedWidth(96)
         for p in core.MASK_PREFIXES:
             self.cmb_prefix.addItem(tr(p), p)
-        sel.addWidget(self.cmb_prefix, 1)
+        lay.addWidget(self.cmb_prefix, 0)
 
         self.cmb_suffix = Combo()
         self.cmb_suffix.setFixedHeight(32)
+        self.cmb_suffix.setFixedWidth(92)
         for s in core.MASK_SUFFIXES:
             self.cmb_suffix.addItem(tr(s), s)
-        sel.addWidget(self.cmb_suffix, 1)
-        lay.addLayout(sel)
+        lay.addWidget(self.cmb_suffix, 0)
 
-        # 自定义输入（留空则用上面的选择）
+        # 自定义输入（留空则用上方下拉框）
         self.ed_mask_custom = QLineEdit()
         self.ed_mask_custom.setObjectName("search")
-        self.ed_mask_custom.setPlaceholderText(tr('自定义型号（可选，如 RTX 4090）'))
+        self.ed_mask_custom.setPlaceholderText(tr('自定义（可选）'))
         self.ed_mask_custom.setToolTip(
-            tr('填了就优先用这里的型号；留空则用上方下拉框的选择'))
-        # 固定高度：侧栏竖向空间紧张时 QLineEdit 会被压成一条线
+            tr('填了就优先用这里的型号；留空则用左侧下拉框的选择'))
         self.ed_mask_custom.setFixedHeight(32)
-        lay.addWidget(self.ed_mask_custom)
+        self.ed_mask_custom.setFixedWidth(150)
+        lay.addWidget(self.ed_mask_custom, 0)
 
-        row = QHBoxLayout()
-        row.setSpacing(8)
         self.btn_mask_apply = QPushButton(tr('应用伪装'))
         self.btn_mask_apply.setObjectName("ghost")
         self.btn_mask_apply.setFixedHeight(32)
         self.btn_mask_apply.setCursor(Qt.PointingHandCursor)
         self.btn_mask_apply.clicked.connect(self.apply_mask)
-        row.addWidget(self.btn_mask_apply, 1)
+        lay.addWidget(self.btn_mask_apply, 0)
 
         self.btn_mask_restore = QPushButton(tr('还原'))
         self.btn_mask_restore.setObjectName("ghost")
@@ -1327,14 +1321,16 @@ class MainWindow(QWidget):
         self.btn_mask_restore.setCursor(Qt.PointingHandCursor)
         self.btn_mask_restore.setToolTip(tr('恢复原始显卡名称，取消伪装'))
         self.btn_mask_restore.clicked.connect(self.restore_mask)
-        row.addWidget(self.btn_mask_restore, 0)
-        lay.addLayout(row)
+        lay.addWidget(self.btn_mask_restore, 0)
 
-        self.mask_tip = QLabel("")
-        self.mask_tip.setWordWrap(True)
-        self.mask_tip.setStyleSheet(f"font-size:11px; color:{C['warn']};")
-        self.mask_tip.setVisible(False)
-        lay.addWidget(self.mask_tip)
+        self.btn_mask_restart = QPushButton(tr('重启显卡'))
+        self.btn_mask_restart.setObjectName("ghost")
+        self.btn_mask_restart.setFixedHeight(32)
+        self.btn_mask_restart.setCursor(Qt.PointingHandCursor)
+        self.btn_mask_restart.setToolTip(
+            tr('立即生效：重启显卡设备使新名称对游戏可见（画面会短暂黑屏）'))
+        self.btn_mask_restart.clicked.connect(self.restart_gpu)
+        lay.addWidget(self.btn_mask_restart, 0)
 
         self._refresh_mask()
         return card
@@ -1348,13 +1344,13 @@ class MainWindow(QWidget):
             self.mask_desc.setText(tr('本机不满足条件：{0}').format(info.reason))
             self.btn_mask_apply.setEnabled(False)
             self.btn_mask_restore.setEnabled(False)
-            self.mask_tip.setVisible(False)
             return
 
         if info.masked:
             self.mask_pill.set_kind(tr('已伪装'), "warn")
             self.mask_desc.setText(
-                tr('当前：{0}\n原始：{1}').format(info.current, info.original))
+                tr('{0}（原 {1}）· 点「重启显卡」立即生效')
+                .format(info.current, info.original))
         else:
             self.mask_pill.set_kind(tr('未伪装'), "muted")
             self.mask_desc.setText(tr('当前：{0}').format(info.current or tr('未知')))
@@ -1364,14 +1360,10 @@ class MainWindow(QWidget):
 
         if not info.admin:
             self.btn_mask_apply.setEnabled(False)
-            self.mask_tip.setVisible(True)
-            self.mask_tip.setText(
+            self.mask_desc.setText(
                 tr('当前非管理员运行，无法修改显卡注册表；请右键以管理员身份重新打开本程序。'))
         else:
             self.btn_mask_apply.setEnabled(True)
-            self.mask_tip.setVisible(info.masked)
-            if info.masked:
-                self.mask_tip.setText(tr('提示：修改后需重启电脑（或重启显卡驱动）才生效。'))
 
     def _mask_choice(self) -> tuple[str, str]:
         """取用户选择的型号。
@@ -1406,56 +1398,63 @@ class MainWindow(QWidget):
         self.toast_msg(msg, "ok" if ok else "bad")
         self._refresh_mask()
 
+    def restart_gpu(self) -> None:
+        """重启显卡设备，让名称改动对游戏（DXGI）立即生效。"""
+        ok, msg = core.restart_gpu_device()
+        self._log((tr('[完成] {0}') if ok else tr('[错误] {0}')).format(msg))
+        self.toast_msg(msg, "ok" if ok else "bad")
+        self._refresh_mask()
+
     # ------------------------------------------------- 系统准备（HAGS）
 
+    def _build_sys_bar(self) -> QWidget:
+        """系统栏：横向承载「系统准备」与「显卡伪装」，不占用游戏列表空间。"""
+        bar = QWidget()
+        lay = QVBoxLayout(bar)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        lay.addWidget(self._build_hags_card())
+        lay.addWidget(self._build_mask_card())
+        return bar
+
     def _build_hags_card(self) -> QWidget:
+        """系统准备卡片（横向紧凑）。"""
         self.hags_info = core.detect_hags(force=True)
         card = QFrame()
         card.setObjectName("hagsCard")
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(12, 10, 12, 11)
-        lay.setSpacing(8)
+        lay = QHBoxLayout(card)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(10)
 
-        top = QHBoxLayout()
-        top.setSpacing(8)
+        col = QVBoxLayout()
+        col.setSpacing(2)
         t = QLabel(tr('系统准备'))
         t.setObjectName("cardTitle")
         t.setStyleSheet("font-size:12px; font-weight:500;")
-        top.addWidget(t, 0)
-        top.addStretch(1)
-        self.hags_pill = Pill(tr('检测中'), "muted")
-        top.addWidget(self.hags_pill, 0)
-        lay.addLayout(top)
-
-        name = QLabel(tr('硬件加速 GPU 计划（HAGS）'))
-        name.setStyleSheet(f"font-size:12px; color:{C['text']};")
-        lay.addWidget(name)
-
+        col.addWidget(t)
         self.hags_desc = QLabel("")
-        self.hags_desc.setWordWrap(True)
         self.hags_desc.setStyleSheet(f"font-size:11px; color:{C['dim']};")
-        lay.addWidget(self.hags_desc)
+        col.addWidget(self.hags_desc)
+        lay.addLayout(col, 1)
 
-        row = QHBoxLayout()
-        row.setSpacing(8)
+        self.hags_pill = Pill(tr('检测中'), "muted")
+        lay.addWidget(self.hags_pill, 0)
+
         self.btn_hags = QPushButton(tr('一键开启'))
         self.btn_hags.setObjectName("ghost")
+        self.btn_hags.setFixedHeight(32)
         self.btn_hags.setCursor(Qt.PointingHandCursor)
+        self.btn_hags.setToolTip(tr('硬件加速 GPU 计划（HAGS）：开启后帧生成时帧时间更稳'))
         self.btn_hags.clicked.connect(self.toggle_hags)
-        row.addWidget(self.btn_hags, 1)
+        lay.addWidget(self.btn_hags, 0)
+
         self.btn_hags_manual = QPushButton(tr('手动设置'))
         self.btn_hags_manual.setObjectName("ghost")
+        self.btn_hags_manual.setFixedHeight(32)
         self.btn_hags_manual.setCursor(Qt.PointingHandCursor)
         self.btn_hags_manual.setToolTip(tr('打开「设置 → 系统 → 屏幕 → 图形设置」页面，手动切换开关'))
         self.btn_hags_manual.clicked.connect(self.open_hags_settings)
-        row.addWidget(self.btn_hags_manual, 0)
-        lay.addLayout(row)
-
-        self.hags_tip = QLabel("")
-        self.hags_tip.setWordWrap(True)
-        self.hags_tip.setStyleSheet(f"font-size:11px; color:{C['warn']};")
-        self.hags_tip.setVisible(False)
-        lay.addWidget(self.hags_tip)
+        lay.addWidget(self.btn_hags_manual, 0)
 
         self._refresh_hags()
         return card
@@ -1470,33 +1469,37 @@ class MainWindow(QWidget):
                 self.tb_hags.set_kind(tr('HAGS 已开启'), "ok")
             else:
                 self.tb_hags.set_kind(tr('HAGS 未开启'), "warn")
+
         if not info.supported:
             self.hags_pill.set_kind(tr('不可用'), "muted")
             self.hags_desc.setText(tr('本机不满足条件：{0}。').format(info.reason))
             self.btn_hags.setEnabled(False)
             self.btn_hags.setText(tr('不可用'))
-            self.hags_tip.setVisible(False)
             return
 
         if info.enabled:
             self.hags_pill.set_kind(tr('已开启'), "ok")
-            self.hags_desc.setText(tr('已开启。GPU 自行调度命令队列，帧生成时帧时间更稳。'))
             self.btn_hags.setText(tr('关闭'))
         else:
             self.hags_pill.set_kind(tr('未开启'), "warn")
-            self.hags_desc.setText(tr('未开启。帧生成会额外提交命令，开启后帧时间更稳，建议打开。'))
             self.btn_hags.setText(tr('一键开启'))
 
         if info.admin:
             self.btn_hags.setEnabled(True)
-            self.hags_tip.setVisible(self.hags_info.needs_reboot_hint)
-            if self.hags_info.needs_reboot_hint:
-                self.hags_tip.setText(tr('提示：修改后需重启电脑才生效。'))
+            tip = tr('硬件加速 GPU 计划（HAGS）')
+            if info.enabled:
+                tip += tr('：已开启，帧生成帧时间更稳。')
+            else:
+                tip += tr('：未开启，建议开启以获得更稳的帧时间。')
+            if info.needs_reboot_hint:
+                tip += tr('（修改后需重启电脑生效）')
+            self.hags_desc.setText(tip)
         else:
             self.btn_hags.setEnabled(False)
             self.btn_hags.setText(tr('需管理员权限'))
-            self.hags_tip.setVisible(True)
-            self.hags_tip.setText(tr('当前非管理员运行，无法自动修改；请用「手动设置」自行切换，或右键以管理员身份重新打开本程序。'))
+            self.hags_desc.setText(
+                tr('硬件加速 GPU 计划（HAGS）：非管理员运行，请用「手动设置」，'
+                   '或右键以管理员身份重新打开本程序。'))
 
     def toggle_hags(self) -> None:
         info = self.hags_info

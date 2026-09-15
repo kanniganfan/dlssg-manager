@@ -27,7 +27,7 @@ import i18n
 from i18n import tr  # 多语言：中文字面量为源键，详见 i18n.py
 
 APP_NAME = "DLSSG Manager"
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.5.0"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
 MOD_NAME = "DLSSG SM86 0.3.0"
 
@@ -403,17 +403,19 @@ def hags_cli_text(info: HagsInfo | None = None) -> str:
 
 # ---------------------------------------------------------------- 显卡伪装
 #
-# 原理：Windows 显示适配器的「友好名称」存在注册表 Class 键下，游戏/DLSS 初始化
-# 时会读它来判断显卡型号。把 DriverDesc / AdapterString / ChipType 改成更高的型号
-# （如 RTX 4060），部分按型号白名单判断的游戏就会允许开启帧生成。
+# 【关键】游戏并不读 Class 键的 DriverDesc —— DXGI / WMI / 多数游戏引擎读取的是
+#   HKLM\SYSTEM\CurrentControlSet\Enum\PCI\<硬件ID>\<实例ID>\DeviceDesc
+# 实测验证：改该值后 WMI(win32_VideoController.Name) 立即反映新名称。
+# 因此伪装必须写 Enum 键，Class 键仅作辅助同步（设备管理器显示用）。
 #
-# 注意：
-# - 只改「名称字符串」，不动 MatchingDeviceId / 硬件 ID —— 驱动匹配不受影响；
-# - 必须管理员权限（HKLM）；
-# - 改完需重启（或重启显卡驱动）才生效；
-# - 原值保存在 state.json 里，可一键还原。
+# 注意 DeviceDesc 原值是 INF 间接引用（"@oem41.inf,%nvidia_dev...%;NVIDIA GeForce RTX 3050"），
+# 必须替换为【字面量名称】才会被识别。
 
 GPU_CLASS_KEY = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+GPU_ENUM_ROOT = r"SYSTEM\CurrentControlSet\Enum\PCI"
+# Enum 设备实例下的名称值（DeviceDesc 是 DXGI/WMI 读取的主值）
+GPU_ENUM_VALUES = ("DeviceDesc", "FriendlyName")
+# Class 键下的名称值（辅助：设备管理器 / 部分工具）
 GPU_NAME_VALUES = ("DriverDesc", "HardwareInformation.AdapterString",
                    "HardwareInformation.ChipType")
 
@@ -429,9 +431,10 @@ class GpuMaskInfo:
 
     supported: bool = True
     admin: bool = False
-    adapter_key: str = ""          # 注册表子键，如 ...\0000
+    adapter_key: str = ""          # Class 子键，如 0000
+    enum_key: str = ""             # Enum 设备实例完整路径
     original: str = ""             # 原始显卡名
-    current: str = ""              # 当前注册表里的名字
+    current: str = ""              # 当前生效的名字（DXGI/WMI 视角）
     masked: bool = False           # 是否处于伪装状态
     reason: str = ""               # 不可用原因
 
@@ -457,8 +460,11 @@ def _find_nvidia_subkey() -> str:
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
                                 f"{GPU_CLASS_KEY}\\{sub}") as k:
                 desc = str(winreg.QueryValueEx(k, "DriverDesc")[0])
-                prov = str(winreg.QueryValueEx(k, "ProviderName")[0]) \
-                    if _has_value(k, "ProviderName") else ""
+                prov = ""
+                try:
+                    prov = str(winreg.QueryValueEx(k, "ProviderName")[0])
+                except Exception:
+                    pass
             if "nvidia" in desc.lower() or "nvidia" in prov.lower():
                 return sub
         except Exception:
@@ -466,16 +472,54 @@ def _find_nvidia_subkey() -> str:
     return ""
 
 
-def _has_value(key, name: str) -> bool:
+def _find_nvidia_enum_key() -> str:
+    """定位 NVIDIA 显卡的 Enum 设备实例路径。
+
+    返回形如 ...Enum-PCI-设备实例 路径
+    """
     try:
-        winreg.QueryValueEx(key, name)
-        return True
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, GPU_ENUM_ROOT) as root:
+            for i in range(winreg.QueryInfoKey(root)[0]):
+                dev = winreg.EnumKey(root, i)
+                if "VEN_10DE" not in dev.upper():
+                    continue          # 只看 NVIDIA（10DE）
+                base = f"{GPU_ENUM_ROOT}\\{dev}"
+                try:
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base) as dk:
+                        for j in range(winreg.QueryInfoKey(dk)[0]):
+                            inst = winreg.EnumKey(dk, j)
+                            full = f"{base}\\{inst}"
+                            # 该实例需有 DeviceDesc 且描述含 NVIDIA
+                            try:
+                                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, full) as ik:
+                                    dd = str(winreg.QueryValueEx(ik, "DeviceDesc")[0])
+                                if "nvidia" in dd.lower():
+                                    return full
+                            except Exception:
+                                continue
+                except Exception:
+                    continue
     except Exception:
-        return False
+        pass
+    return ""
+
+
+def _parse_device_desc(raw: str) -> str:
+    """从 DeviceDesc 提取可读名称。
+
+    DeviceDesc 可能是 INF 间接引用格式：
+        @oem41.inf,%nvidia_dev.25a2.11dc.1043%;NVIDIA GeForce RTX 3050 Laptop GPU
+    取分号后那段；已是字面量则原样返回。
+    """
+    if not raw:
+        return ""
+    if raw.startswith("@") and ";" in raw:
+        return raw.rsplit(";", 1)[-1].strip()
+    return raw.strip()
 
 
 def _read_gpu_names(sub: str) -> dict[str, str]:
-    """读取子键下的三个名称值。"""
+    """读取 Class 子键下的名称值。"""
     vals: dict[str, str] = {}
     try:
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
@@ -489,6 +533,18 @@ def _read_gpu_names(sub: str) -> dict[str, str]:
     except Exception:
         pass
     return vals
+
+
+def _read_enum_name(enum_key: str) -> str:
+    """读取 Enum 设备实例当前生效的名称（DXGI/WMI 视角）。"""
+    if not enum_key:
+        return ""
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, enum_key) as k:
+            raw = winreg.QueryValueEx(k, "DeviceDesc")[0]
+        return _parse_device_desc(str(raw))
+    except Exception:
+        return ""
 
 
 def detect_gpu_mask(force: bool = False) -> GpuMaskInfo:
@@ -505,28 +561,31 @@ def detect_gpu_mask(force: bool = False) -> GpuMaskInfo:
         _MASK_CACHE = info
         return info
 
+    enum_key = _find_nvidia_enum_key()
     sub = _find_nvidia_subkey()
-    if not sub:
+    if not enum_key and not sub:
         info.supported = False
         info.reason = tr('未找到 NVIDIA 显卡的注册表项')
         _MASK_CACHE = info
         return info
 
     info.adapter_key = sub
-    names = _read_gpu_names(sub)
-    info.current = names.get("DriverDesc", "")
+    info.enum_key = enum_key
 
-    # 原始名称从 state 读取；state 里没有说明从未伪装过，当前名即原始名
+    # 生效名称以 Enum 为准（游戏读这里）；Enum 不可用时退回 Class
+    info.current = _read_enum_name(enum_key)
+    if not info.current:
+        names = _read_gpu_names(sub)
+        info.current = _parse_device_desc(names.get("DriverDesc", ""))
+
     st = load_state()
     rec = st.get("gpu_mask") or {}
     info.original = rec.get("original") or info.current
     info.masked = bool(rec.get("masked")) and bool(rec.get("original"))
-
-    # 交叉校验：当前名与记录不符，说明被外部改过
-    if info.masked and info.current and info.original \
-            and info.current == info.original:
-        # 记录说伪装了但名字是原始的 -> 可能已手动还原
+    # 名称已回到原始值 -> 视为未伪装
+    if info.masked and info.original and info.current == info.original:
         info.masked = False
+
     _MASK_CACHE = info
     return info
 
@@ -553,10 +612,41 @@ def build_mask_name(prefix: str, suffix: str) -> str:
         return core_name
     if up.startswith("GEFORCE"):
         return f"NVIDIA {core_name}"
-    # 纯数字或形如 "4090 Ti" 的后缀 -> 补 RTX
     if core_name[0].isdigit() or up.startswith("RTX"):
         core_name = core_name if up.startswith("RTX") else f"RTX {core_name}"
     return f"NVIDIA GeForce {core_name}"
+
+
+def _write_name_values(name: str, enum_key: str, class_sub: str,
+                       logs: list[str]) -> None:
+    """把名称写入 Enum 与 Class 两个位置（Enum 为主）。"""
+    errs = []
+    # 1) Enum 设备实例 —— 游戏读取处
+    if enum_key:
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, enum_key, 0,
+                                winreg.KEY_SET_VALUE) as k:
+                for n in GPU_ENUM_VALUES:
+                    winreg.SetValueEx(k, n, 0, winreg.REG_SZ, name)
+            logs.append(tr('[写入] Enum\\DeviceDesc = {0}').format(name))
+        except Exception as e:
+            errs.append(f"Enum: {type(e).__name__}: {e}")
+    # 2) Class 键 —— 设备管理器 / 部分工具
+    if class_sub:
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                f"{GPU_CLASS_KEY}\\{class_sub}", 0,
+                                winreg.KEY_SET_VALUE) as k:
+                for n in GPU_NAME_VALUES:
+                    try:
+                        winreg.SetValueEx(k, n, 0, winreg.REG_SZ, name)
+                    except Exception:
+                        pass      # 驱动可能不允许写个别值，不致命
+            logs.append(tr('[写入] Class\\DriverDesc = {0}').format(name))
+        except Exception as e:
+            errs.append(f"Class: {type(e).__name__}: {e}")
+    if errs:
+        logs.append(tr('[警告] 部分位置写入失败：{0}').format('；'.join(errs)))
 
 
 def apply_gpu_mask(prefix: str, suffix: str) -> tuple[bool, str]:
@@ -568,31 +658,29 @@ def apply_gpu_mask(prefix: str, suffix: str) -> tuple[bool, str]:
         return False, tr('请先选择要伪装的显卡型号')
 
     info = detect_gpu_mask(force=True)
-    if not info.supported or not info.adapter_key:
+    if not info.supported:
         return False, info.reason or tr('未找到 NVIDIA 显卡的注册表项')
 
     st = load_state()
     rec = st.get("gpu_mask") or {}
-    # 首次伪装时记下原始名；已伪装过则沿用最初的原始名
     original = rec.get("original") or info.current
     if not original:
         return False, tr('无法读取当前显卡名称')
 
-    key = f"{GPU_CLASS_KEY}\\{info.adapter_key}"
+    logs: list[str] = []
     try:
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key, 0,
-                            winreg.KEY_SET_VALUE) as k:
-            for n in GPU_NAME_VALUES:
-                winreg.SetValueEx(k, n, 0, winreg.REG_SZ, new_name)
-        st["gpu_mask"] = {"original": original, "masked": True,
-                          "name": new_name, "prefix": prefix, "suffix": suffix}
-        save_state(st)
-        detect_gpu_mask(force=True)
-        return True, tr('已伪装为 {0}（原 {1}），重启电脑后生效').format(new_name, original)
+        _write_name_values(new_name, info.enum_key, info.adapter_key, logs)
     except PermissionError:
         return False, tr('需要管理员权限才能修改显卡注册表')
     except Exception as e:
         return False, tr('写入失败：{0}: {1}').format(type(e).__name__, e)
+
+    st["gpu_mask"] = {"original": original, "masked": True, "name": new_name,
+                      "prefix": prefix, "suffix": suffix,
+                      "enum_key": info.enum_key, "class_sub": info.adapter_key}
+    save_state(st)
+    detect_gpu_mask(force=True)
+    return True, tr('已伪装为 {0}（原 {1}），重启电脑后生效').format(new_name, original)
 
 
 def restore_gpu_mask() -> tuple[bool, str]:
@@ -600,7 +688,7 @@ def restore_gpu_mask() -> tuple[bool, str]:
     if os.name != "nt":
         return False, tr('非 Windows 系统，无法设置')
     info = detect_gpu_mask(force=True)
-    if not info.supported or not info.adapter_key:
+    if not info.supported:
         return False, info.reason or tr('未找到 NVIDIA 显卡的注册表项')
 
     st = load_state()
@@ -609,20 +697,46 @@ def restore_gpu_mask() -> tuple[bool, str]:
     if not original:
         return False, tr('没有可还原的原始显卡名称记录')
 
-    key = f"{GPU_CLASS_KEY}\\{info.adapter_key}"
+    logs: list[str] = []
     try:
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key, 0,
-                            winreg.KEY_SET_VALUE) as k:
-            for n in GPU_NAME_VALUES:
-                winreg.SetValueEx(k, n, 0, winreg.REG_SZ, original)
-        st["gpu_mask"] = {"original": original, "masked": False}
-        save_state(st)
-        detect_gpu_mask(force=True)
-        return True, tr('已还原为 {0}，重启电脑后生效').format(original)
+        _write_name_values(original, info.enum_key or rec.get("enum_key", ""),
+                           info.adapter_key or rec.get("class_sub", ""), logs)
     except PermissionError:
         return False, tr('需要管理员权限才能修改显卡注册表')
     except Exception as e:
         return False, tr('还原失败：{0}: {1}').format(type(e).__name__, e)
+
+    st["gpu_mask"] = {"original": original, "masked": False}
+    save_state(st)
+    detect_gpu_mask(force=True)
+    return True, tr('已还原为 {0}，重启电脑后生效').format(original)
+
+
+def restart_gpu_device() -> tuple[bool, str]:
+    """重启显卡设备，让名称改动立即生效。
+
+    DXGI 在驱动初始化时缓存适配器名称，改注册表后不重启不会刷新
+    （实测：改完立即读 DXGI 仍是旧名，重启设备后变为新名）。
+    用 pnputil /restart-device 等效于禁用+启用设备，通常伴随短暂黑屏。
+    """
+    if os.name != "nt":
+        return False, tr('非 Windows 系统')
+    if not is_admin():
+        return False, tr('需要管理员权限才能重启显卡设备')
+    info = detect_gpu_mask(force=True)
+    if not info.enum_key:
+        return False, tr('未找到 NVIDIA 显卡设备实例')
+    inst = info.enum_key.split("Enum\\", 1)[-1]
+    try:
+        r = subprocess.run(["pnputil", "/restart-device", inst],
+                           capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=60)
+        if r.returncode == 0:
+            return True, tr('已重启显卡设备，新的显卡名称立即生效')
+        return False, tr('重启设备失败：{0}').format(
+            (r.stderr or r.stdout or '').strip()[:200] or f"code={r.returncode}")
+    except Exception as e:
+        return False, tr('重启设备失败：{0}: {1}').format(type(e).__name__, e)
 
 
 def gpu_mask_cli_text(info: GpuMaskInfo | None = None) -> str:

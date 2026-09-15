@@ -219,6 +219,28 @@ EN = {
     "四种工具类入口名均已被其他程序占用；可在「高级」里手动指定渲染路径代理（dxgi / d3d12，二者只能选一个）": "All four tool-class proxy names are taken by other programs; pick a render-path proxy (dxgi / d3d12 - only one of the two) manually in Advanced.",
     "[完成] 已启用（{0}）。重启游戏后进入画面设置，打开“帧生成”并选择倍率；游戏支持动态插帧时最高可选 {1}X。": "[Done] Enabled ({0}). Restart the game, open graphics settings and pick a multiplier; up to {1}X where the game supports dynamic frame generation.",
     "[警告] {0} 位于 D3D12 渲染热路径，加载顺序敏感，仅在工具类代理都不可用时使用。": "[Warning] {0} sits on the D3D12 render hot path; load order is sensitive, so use it only when every tool-class proxy is unavailable.",
+    "重启显卡": "Restart GPU",
+    "已重启显卡设备，新的显卡名称立即生效": "GPU device restarted - the new name takes effect immediately",
+    "需要管理员权限才能重启显卡设备": "Administrator rights are required to restart the GPU device",
+    "重启设备失败：{0}": "Failed to restart device: {0}",
+    "重启设备失败：{0}: {1}": "Failed to restart device: {0}: {1}",
+    "{0}（原 {1}）· 点「重启显卡」立即生效": "{0} (was {1}) - click \"Restart GPU\" to apply now",
+    "立即生效：重启显卡设备使新名称对游戏可见（画面会短暂黑屏）": "Apply now: restart the GPU device so games see the new name (the screen will blink briefly)",
+    "：已开启，帧生成帧时间更稳。": ": enabled - steadier frame times with frame generation.",
+    "：未开启，建议开启以获得更稳的帧时间。": ": disabled - recommended for steadier frame times.",
+    "（修改后需重启电脑生效）": " (restart required to apply)",
+    "硬件加速 GPU 计划（HAGS）：非管理员运行，请用「手动设置」，或右键以管理员身份重新打开本程序。": "Hardware-accelerated GPU scheduling (HAGS): not running as administrator. Use \"Manual setup\", or right-click the app and choose \"Run as administrator\".",
+    "[写入] Enum\\DeviceDesc = {0}": "[Write] Enum\\DeviceDesc = {0}",
+    "[写入] Class\\DriverDesc = {0}": "[Write] Class\\DriverDesc = {0}",
+    "[警告] 部分位置写入失败：{0}": "[Warning] Some locations could not be written: {0}",
+    "未找到 NVIDIA 显卡设备实例": "No NVIDIA GPU device instance found",
+    "填了就优先用这里的型号；留空则用左侧下拉框的选择": "If filled, this takes priority over the dropdowns on the left",
+    "硬件加速 GPU 计划（HAGS）：开启后帧生成时帧时间更稳": "Hardware-accelerated GPU scheduling (HAGS): enables steadier frame times with frame generation",
+    "自定义（可选）": "Custom (optional)",
+    "默认入口（首选）": "Default proxy (preferred)",
+    "第二选择": "Second choice",
+    "第三选择": "Third choice",
+    "老输入栈游戏": "Older input stacks",
     "显卡伪装": "GPU Spoofing",
     "本机不满足条件：{0}": "This machine does not meet the requirements: {0}",
     "[完成] {0}": "[Done] {0}",
@@ -241,10 +263,16 @@ EN = {
     "未找到 NVIDIA 显卡的注册表项": "No NVIDIA GPU registry entry found",
     "无法读取当前显卡名称": "Cannot read the current GPU name",
     "没有可还原的原始显卡名称记录": "No saved original GPU name to restore",
-    "写入失败：{0}: {1}": "Write failed: {0}: {1}",
     "还原失败：{0}: {1}": "Restore failed: {0}: {1}",
     "提示：修改后需重启电脑（或重启显卡驱动）才生效。": "Note: a restart (or GPU driver restart) is needed for this to take effect.",
     "界面语言（切换后重启程序生效）": "Interface language (restart to apply)",
+    "310.9 运行库（最新，支持 6X）": "310.9 runtime (latest, supports 6X)",
+    "310.1 运行库（老版本，上限 4X）": "310.1 runtime (older, capped at 4X)",
+    "默认入口（首选）": "Default proxy (preferred)",
+    "第二选择": "Second choice",
+    "第三选择": "Third choice",
+    "老输入栈游戏": "Older input stacks",
+    "渲染路径（高风险）": "Render path (risky)",
 }
 
 ZH_TW = {
@@ -457,6 +485,28 @@ ZH_TW = {
     "四种工具类入口名均已被其他程序占用；可在「高级」里手动指定渲染路径代理（dxgi / d3d12，二者只能选一个）": "四種工具類入口名稱均已被其他程式佔用；可在「進階」裡手動指定渲染路徑代理（dxgi / d3d12，二者只能選一個）",
     "[完成] 已启用（{0}）。重启游戏后进入画面设置，打开“帧生成”并选择倍率；游戏支持动态插帧时最高可选 {1}X。": "[完成] 已啟用（{0}）。重新啟動遊戲後進入畫面設定，開啟「帧生成」並選擇倍率；遊戲支援動態插帧時最高可選 {1}X。",
     "[警告] {0} 位于 D3D12 渲染热路径，加载顺序敏感，仅在工具类代理都不可用时使用。": "[警告] {0} 位於 D3D12 渲染熱路徑，載入順序敏感，僅在工具類代理都不可用時使用。",
+    "自定义（可选）": "自訂（選填）",
+    "已重启显卡设备，新的显卡名称立即生效": "已重啟顯卡裝置，新的顯卡名稱立即生效",
+    "：未开启，建议开启以获得更稳的帧时间。": "：未開啟，建議開啟以獲得更穩的帧時間。",
+    "：已开启，帧生成帧时间更稳。": "：已開啟，帧生成帧時間更穩。",
+    "重启设备失败：{0}": "重啟裝置失敗：{0}",
+    "重启设备失败：{0}: {1}": "重啟裝置失敗：{0}: {1}",
+    "立即生效：重启显卡设备使新名称对游戏可见（画面会短暂黑屏）": "立即生效：重啟顯卡裝置使新名稱對遊戲可見（畫面會短暫黑屏）",
+    "{0}（原 {1}）· 点「重启显卡」立即生效": "{0}（原 {1}）· 點「重啟顯卡」立即生效",
+    "需要管理员权限才能重启显卡设备": "需要管理員權限才能重啟顯卡裝置",
+    "填了就优先用这里的型号；留空则用左侧下拉框的选择": "填寫後優先採用此型號；留空則使用左側下拉選單",
+    "未找到 NVIDIA 显卡设备实例": "找不到 NVIDIA 顯卡裝置執行個體",
+    "硬件加速 GPU 计划（HAGS）：开启后帧生成时帧时间更稳": "硬體加速 GPU 計畫（HAGS）：開啟後帧生成時帧時間更穩",
+    "（修改后需重启电脑生效）": "（修改後需重新啟動電腦生效）",
+    "硬件加速 GPU 计划（HAGS）：非管理员运行，请用「手动设置」，或右键以管理员身份重新打开本程序。": "硬體加速 GPU 計畫（HAGS）：非管理員執行，請用「手動設定」，或以滑鼠右鍵選擇「以管理員身分執行」重新開啟本程式。",
+    "重启显卡": "重啟顯卡",
+    "[写入] Enum\\DeviceDesc = {0}": "[寫入] Enum\\DeviceDesc = {0}",
+    "[写入] Class\\DriverDesc = {0}": "[寫入] Class\\DriverDesc = {0}",
+    "[警告] 部分位置写入失败：{0}": "[警告] 部分位置寫入失敗：{0}",
+    "默认入口（首选）": "預設入口（首選）",
+    "第二选择": "第二選擇",
+    "第三选择": "第三選擇",
+    "老输入栈游戏": "舊輸入堆疊遊戲",
     "显卡伪装": "顯卡偽裝",
     "本机不满足条件：{0}": "本機不滿足條件：{0}",
     "[完成] {0}": "[完成] {0}",
@@ -479,10 +529,16 @@ ZH_TW = {
     "未找到 NVIDIA 显卡的注册表项": "找不到 NVIDIA 顯卡的登錄檔項目",
     "无法读取当前显卡名称": "無法讀取目前顯卡名稱",
     "没有可还原的原始显卡名称记录": "沒有可還原的原始顯卡名稱記錄",
-    "写入失败：{0}: {1}": "寫入失敗：{0}: {1}",
     "还原失败：{0}: {1}": "還原失敗：{0}: {1}",
     "提示：修改后需重启电脑（或重启显卡驱动）才生效。": "提示：修改後需重新啟動電腦（或重啟顯卡驅動）才生效。",
     "界面语言（切换后重启程序生效）": "介面語言（切換後重新啟動程式生效）",
+    "310.9 运行库（最新，支持 6X）": "310.9 執行庫（最新，支援 6X）",
+    "310.1 运行库（老版本，上限 4X）": "310.1 執行庫（舊版，上限 4X）",
+    "默认入口（首选）": "預設入口（首選）",
+    "第二选择": "第二選擇",
+    "第三选择": "第三選擇",
+    "老输入栈游戏": "舊輸入堆疊遊戲",
+    "渲染路径（高风险）": "渲染路徑（高風險）",
 }
 
 
@@ -502,14 +558,20 @@ def extract_keys():
 
 
 def build(catalog: dict, code: str, name: str) -> dict:
-    keys = extract_keys()
+    keys = list(extract_keys())
     extra = ["硬件加速 GPU 计划已开启，重启电脑后生效",
              "硬件加速 GPU 计划已关闭，重启电脑后生效",
              "语言已切换为 {0}，重启程序后生效",
              "Ampere（SM86）", "Turing（SM75）", "、", "；",
              "[完成] HAGS：{0}", "[错误] HAGS：{0}",
              "已部署 {0}（Router={1}）",
-             "界面语言（切换后重启程序生效）"]
+             "界面语言（切换后重启程序生效）",
+             # core.RUNTIMES / core.ENTRIES 的描述字段经 tr(变量) 传入，
+             # AST 提取器看不到字面量，必须在此显式登记
+             "310.9 运行库（最新，支持 6X）",
+             "310.1 运行库（老版本，上限 4X）",
+             "默认入口（首选）", "第二选择", "第三选择", "老输入栈游戏",
+             "渲染路径（高风险）", "备用入口", "默认入口"]
     for k in extra:
         if k not in keys:
             keys.append(k)

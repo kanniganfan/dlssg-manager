@@ -1,8 +1,22 @@
-fix: 修复扫描崩溃（entry_of_deployment 元组解包未同步）
+feat: 显卡伪装彻底修复 + 系统栏布局（v1.5.0）
 
-- entry_of_deployment 仍按 4 元组解包 ENTRIES，但 v1.4.0 已改为 5 元组，
-  导致扫描时抛 ValueError: too many values to unpack (expected 4)
-- 改用索引访问，并混用 _all_known_hashes() 以同时识别历史版本部署
-- 新增 scripts/check_tuple_arity.py：AST 静态自检，捕获「元组表加字段但
-  遍历点未同步」这类错误（本项目已犯两次，纳入构建前检查）
-- 版本 1.4.1
+显卡伪装（严重缺陷修复）：
+- 根因：此前只改 Class 键 DriverDesc，但游戏经 DXGI / WMI 读取的是
+  Enum 设备实例的 DeviceDesc，因此改了对游戏完全无效
+- 修正写入位置：HKLM\SYSTEM\CurrentControlSet\Enum\PCI\<硬件ID>\<实例ID>\
+  DeviceDesc + FriendlyName（Class 键保留为辅助同步）
+- DeviceDesc 原值是 INF 间接引用（@oem41.inf,%...%;名称），必须改为【字面量】
+  才会被识别；新增解析/写入处理
+- 新增「重启显卡」：DXGI 在驱动初始化时缓存适配器名称，改注册表后不会刷新，
+  必须重启显卡设备（pnputil /restart-device）才对游戏可见
+- 实测：应用 RTX 5070 → 重启显卡 → DXGI 读到的名称由 3050 变为 5070；
+  还原 + 重启 → 回到 3050（编译 DXGI 探测程序做的独立验证）
+
+界面布局：
+- 「系统准备」与「显卡伪装」从左侧栏移出，改为横跨顶部的系统栏，
+  不再挤占游戏列表展示空间；游戏列表恢复独占侧栏
+- 两个卡片改为横向紧凑布局；移除被挤压风险
+
+其他：
+- i18n 扩至 232 条（补 core 元组描述等 AST 提取不到的键），三语言零缺翻
+- 生成器修正 set/list 类型问题、清理重复键
