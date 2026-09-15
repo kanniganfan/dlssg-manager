@@ -596,12 +596,14 @@ class Splash(QWidget):
     MIN_MS = 2600      # 至少停留这么久
     MAX_MS = 4200      # 最长等待这么久
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, embedded: bool = False):
         super().__init__(parent)
         self.setObjectName("splash")
-        # 不透明窗口 + 纯自绘（无半透明）：DWM 不用做逐帧合成，
+        # embedded=True：作为主窗口的子控件内嵌显示（不弹独立窗口）；
+        # embedded=False：旧的顶层窗口模式（保留以兼容）。
+        self.embedded = embedded
+        # 不透明绘制 + 纯自绘（无半透明）：DWM 不用做逐帧合成，
         # 从根上避免「卡住 / 局部空白 / 要鼠标划过才刷新」这类重绘残缺。
-        # 圆角改由 paintEvent 把四角涂成与主界面同色近似的方式处理。
         self.setAttribute(Qt.WA_StyledBackground, False)
         self.setAttribute(Qt.WA_OpaquePaintEvent, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
@@ -685,9 +687,15 @@ class Splash(QWidget):
         p.setRenderHint(QPainter.TextAntialiasing)
         w, h = self.width(), self.height()
 
-        # 不透明窗口：先整块铺满（避免残留），再用圆角路径画背景
+        # 尺寸自适应：所有几何量按容器缩放（基准 1120x720），
+        # 窗口变大/变小时动画整体等比放大缩小，不再用固定字号。
+        BASE_W, BASE_H = 1120.0, 720.0
+        k = max(0.55, min(2.2, min(w / BASE_W, h / BASE_H)))
+        self._scale = k
+
+        # 不透明绘制：先整块铺满（避免残留），再用圆角路径画背景
         p.fillRect(self.rect(), QColor("#05070B"))
-        radius = 16.0
+        radius = 16.0 if not self.embedded else 0.0
         path = QPainterPath()
         path.addRoundedRect(QRectF(0, 0, w, h), radius, radius)
 
@@ -710,18 +718,22 @@ class Splash(QWidget):
             return
 
         p.setOpacity(a)
-        cx, cy = w / 2, h / 2 - 8
+        cx, cy = w / 2, h / 2 - 8 * k
 
-        # 中心光晕
-        radial = QRadialGradient(cx, cy, max(w, h) * 0.34)
+        # 中心光晕（半径随容器缩放）
+        radius_glow = max(w, h) * 0.34
+        radial = QRadialGradient(cx, cy, radius_glow)
         radial.setColorAt(0.0, QColor(91, 140, 255, 34))
         radial.setColorAt(1.0, QColor(91, 140, 255, 0))
         p.setPen(Qt.NoPen)
         p.setBrush(QBrush(radial))
-        p.drawEllipse(QRectF(cx - w * 0.34, cy - h * 0.34, w * 0.68, h * 0.68))
+        p.drawEllipse(QRectF(cx - radius_glow, cy - radius_glow,
+                             radius_glow * 2, radius_glow * 2))
 
-        # KANNI 逐字渐显：每个字符有自己的 [起, 起+0.4] 窗口
-        f = QFont("Segoe UI", 46)
+        # KANNI 逐字渐显：每个字符有自己的 [起, 起+0.42] 窗口。
+        # 字号按容器缩放（基准 46pt @1120x720），窗口越大字越大。
+        f = QFont("Segoe UI")
+        f.setPixelSize(max(18, int(round(62 * k))))
         f.setWeight(QFont.Black)
         f.setLetterSpacing(QFont.PercentageSpacing, 116)
         p.setFont(f)
@@ -732,53 +744,53 @@ class Splash(QWidget):
         adv = [fm.horizontalAdvance(ch) for ch in self.WORD]
         total = sum(adv)
         x = cx - total / 2
-        baseline = cy + fm.capHeight() / 2 + 2
+        baseline = cy + fm.capHeight() / 2 + 2 * k
         for i, ch in enumerate(self.WORD):
             t0 = i * step
             raw = (self._progress - t0) / span
-            k = max(0.0, min(1.0, raw))
-            k = 1 - (1 - k) ** 3                      # easeOutCubic
-            if k <= 0.001:
+            kk = max(0.0, min(1.0, raw))
+            kk = 1 - (1 - kk) ** 3                    # easeOutCubic
+            if kk <= 0.001:
                 x += adv[i]
                 continue
-            # 未完成的字符带一点上浮与光晕
-            rise = (1 - k) * 16
-            glow = 26 * (k ** 1.6) * (1 if self._progress < 1 else 0.6)
+            # 未完成的字符带一点上浮与光晕（幅度随容器缩放）
+            rise = (1 - kk) * 16 * k
+            glow = 26 * (kk ** 1.6) * (1 if self._progress < 1 else 0.6)
             col = QColor("#7FA3FF")
-            col.setAlphaF(min(1.0, k * 0.42))
-            p.setPen(QColor(0, 0, 0, 0))
-            gpen = QPen(QColor("#5B8CFF"))
-            gpen.setWidthF(1.4)
-            gpen.setJoinStyle(Qt.RoundJoin)
-            # 描边发光（用同一字符多次描边近似）
+            col.setAlphaF(min(1.0, kk * 0.42))
+            # 描边发光（用同一字符描边近似）
             if glow > 1:
                 gp = QPainterPath()
                 gp.addText(x, baseline - rise, f, ch)
-                p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), int(glow * 2.2)), 2.0))
+                p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), int(glow * 2.2)),
+                              2.0 * k))
                 p.setBrush(Qt.NoBrush)
                 p.drawPath(gp)
-            p.setPen(QColor(233, 236, 241, int(255 * k)))
+            p.setPen(QColor(233, 236, 241, int(255 * kk)))
             p.drawText(QPointF(x, baseline - rise), ch)
             x += adv[i]
 
-        # 副标题与进度点
-        f2 = QFont("Segoe UI", 9)
+        # 副标题（字号随容器缩放）
+        f2 = QFont("Segoe UI")
+        f2.setPixelSize(max(8, int(round(12 * k))))
         f2.setLetterSpacing(QFont.PercentageSpacing, 300)
         p.setFont(f2)
         p.setPen(QColor(139, 147, 163, int(150 * a)))
         sub = self.SUB
         fm2 = QFontMetricsF(f2)
-        p.drawText(QPointF(cx - fm2.horizontalAdvance(sub) / 2, baseline + 34), sub)
+        p.drawText(QPointF(cx - fm2.horizontalAdvance(sub) / 2,
+                           baseline + 34 * k), sub)
 
-        # 载入点：三个点依次呼吸
-        dot_y = baseline + 58
+        # 载入点：三个点依次呼吸（位置与半径随容器缩放）
+        dot_y = baseline + 58 * k
+        gap = 16 * k
         for i in range(3):
             ph = (self._tick * 0.42 + i * 0.28) % 1.0
             breathe = 0.35 + 0.65 * (1 - abs(ph * 2 - 1))
-            r = 2.6 + 1.6 * breathe
+            r = (2.6 + 1.6 * breathe) * k
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(91, 140, 255, int(210 * breathe * a)))
-            p.drawEllipse(QRectF(cx - 16 + i * 16 - r, dot_y - r, r * 2, r * 2))
+            p.drawEllipse(QRectF(cx - gap + i * gap - r, dot_y - r, r * 2, r * 2))
         p.end()
 
 
@@ -818,8 +830,10 @@ class MainWindow(QWidget):
 
         self.setWindowTitle(core.APP_TITLE)
         self.setWindowIcon(make_icon())
-        self.setMinimumSize(940, 620)
-        self.resize(1120, 720)
+        # 默认高度提高：顶部新增系统栏（HAGS + 显卡伪装）后 720 偏挤，
+        # 高度给到 840，同时抬高最小高度下限，保证游戏列表有充足展示空间。
+        self.setMinimumSize(960, 700)
+        self.resize(1160, 840)
         if not shot_mode:
             self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
             # 半透明分层窗口：外圈 20px 边距真正透明，四周圆角由 RootFrame 画出。
@@ -904,30 +918,20 @@ class MainWindow(QWidget):
         self._init_ready = True
 
     def _mount_splash(self) -> None:
-        # 关键：splash 做成独立的顶层无边框窗口，盖在主窗口之上。
-        # 早期把它挂成 root 的子控件，会出现「主界面不重绘 / 卡住 / 要鼠标划过才显示」
-        # 的问题——子控件大范围遮挡时父级不会自动补绘，且 deleteLater 会留下残影。
-        #
-        # 现在进一步：splash 是【不透明】顶层窗口，不再依赖 WA_TranslucentBackground
-        # 的逐帧合成，重绘残缺问题从根上消失。
-        self.splash = Splash()
-        self.splash.setWindowFlags(Qt.FramelessWindowHint | Qt.Window
-                                   | Qt.WindowStaysOnTopHint | Qt.Tool
-                                   | Qt.NoDropShadowWindowHint)
-        self.splash.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        """载入动画【内嵌】在主窗口内显示（不弹独立窗口）。
+
+        实现要点：
+        - Splash 作为 root 的子控件，铺满 root 区域并置顶（raise_()）；
+        - 用不透明自绘 + WA_OpaquePaintEvent，避免半透明逐帧合成的重绘残缺；
+        - 随主窗口缩放：resizeEvent 里同步几何（子控件天然随父级布局，
+          这里额外兜底一次，确保动画画布尺寸即时跟随）。
+        """
+        self.splash = Splash(self.root, embedded=True)
         self.splash.finished.connect(self._splash_gone)
         self._place_splash()
         self.splash.show()
         self.splash.raise_()
         self.splash.start()
-
-        # 无边框顶层窗口在主窗口 move()/resize() 时不一定收到事件，
-        # 用「主窗口事件过滤器 + 轻量跟随定时器」双保险，保证 splash 始终贴住主窗口。
-        self.installEventFilter(self)
-        self._follow = QTimer(self)
-        self._follow.setInterval(16)
-        self._follow.timeout.connect(self._place_splash)
-        self._follow.start()
 
         QTimer.singleShot(Splash.MIN_MS, self._splash_min_elapsed)
         QTimer.singleShot(Splash.MAX_MS, self._splash_min_elapsed)
@@ -943,8 +947,14 @@ class MainWindow(QWidget):
         s = getattr(self, "splash", None)
         if s is None:
             return
-        # 盖满【整个窗口】而不是只盖 root：主窗口有 20px 半透明边距，
-        # 若只盖 root，加载期间四周会露出一圈主窗口的透明区，观感很脏。
+        if getattr(s, "embedded", False):
+            # 内嵌模式：铺满 root 区域（随 root 尺寸自适应）
+            r = self.root.rect()
+            if s.geometry() != r:
+                s.setGeometry(r)
+                s.raise_()
+            return
+        # 顶层模式（兼容保留）：盖满整个窗口
         top_left = self.mapToGlobal(QPoint(0, 0))
         geo = QRect(top_left.x(), top_left.y(), self.width(), self.height())
         if s.geometry() != geo:
@@ -961,13 +971,9 @@ class MainWindow(QWidget):
     def _splash_gone(self) -> None:
         s = getattr(self, "splash", None)
         if s is not None:
-            s.close()
+            s.hide()
             s.deleteLater()
             self.splash = None
-        # 停掉跟随定时器，避免空转
-        f = getattr(self, "_follow", None)
-        if f is not None:
-            f.stop()
         # 让底层主窗口强制整屏重绘一次，确保立刻显示而不是等鼠标移入
         self._repaint_all()
         QTimer.singleShot(60, self.start_scan)
