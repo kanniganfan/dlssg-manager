@@ -27,9 +27,9 @@ import i18n
 from i18n import tr  # 多语言：中文字面量为源键，详见 i18n.py
 
 APP_NAME = "DLSSG Manager"
-APP_VERSION = "1.5.3"
+APP_VERSION = "1.6.0"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
-MOD_NAME = "DLSSG SM86 0.3.0"
+MOD_NAME = "DLSSG SM86 0.3.1"
 
 INI_NAME = "dlssg_sm86.ini"
 LOG_DIR_NAME = "dlssg_sm86"
@@ -68,21 +68,42 @@ PAYLOAD_SHA256_LEGACY = {
     "altnative/dxgi.dll": "8d29eddbd7f1c3e272d07f94ab8812a80ef5b7aeb73923320bf9a432ddcf74c0",
 }
 
-PAYLOAD_SHA256 = {
-    # --- 310.9（根目录）---
+# 上游 0.3.1（commit f275d45）重建的全部 12 个代理 DLL。
+# 本版相对 0.3.0：恢复 RTX 20（SM75）支持、INI 逐键回退、出厂 4X、fg_gate 诊断；
+# 所有 DLL 重编译重签名，体积约 26.7~28.3 MB（0.3.0 为 17.5~19.0 MB）。
+# 旧版哈希保留在 PAYLOAD_SHA256_LEGACY 之外的 _PREV 表中，用于识别 0.3.0 部署。
+PAYLOAD_SHA256_PREV = {
+    # --- 0.3.0 310.9（根目录）---
     "version.dll": "a22d2453f25d7df3fdc0d6d683c21f01769a115439d58f1341183a75faaf8c7d",
     "alternatives/winmm.dll": "197f97e90541ae688d291ef388b1eddc0c55cb657603eb55dea2d3d178b1e384",
     "alternatives/dbghelp.dll": "10e2fe2d84b8b674e184891ca5211b01c43c6700e1c8b8c6d4969286f653bff8",
     "alternatives/dinput8.dll": "01fdd5e77e64045400a2e7b6f35f98f3403335e30cd9def0e996f78240aa65da",
     "alternatives/dxgi.dll": "ae37150fe056f3388571481ad4aaf78fad720e9b52eb7e6e1e9d2dff85df841e",
     "alternatives/d3d12.dll": "63e7c3a1ba0b10e37e1a162ccf3aa2e19a0f7359de63787585c09baffd67ad45",
-    # --- 310.1（310.1/ 子目录）---
+    # --- 0.3.0 310.1（310.1/ 子目录）---
     "310.1/version.dll": "4646fe15a21c01d251865253f55cefd5892dd2e561ece0c8efa49ae78b5de32e",
     "310.1/alternatives/winmm.dll": "dde7ec668130b09f807338c4c594609a75349860bb5ca4428797f6ab2175b9c1",
     "310.1/alternatives/dbghelp.dll": "1537a207f6490f49373ac8164e2021e6f25bd212e4abc8564dfd8110ad3afe28",
     "310.1/alternatives/dinput8.dll": "e87a61ef84f60b58e5f3b841006992a30d8fd2998096f065b317e7126ebccd9b",
     "310.1/alternatives/dxgi.dll": "f8d823609f994861d27abf50c9cb78386202650f8da1c868eaa2a40f13feef70",
     "310.1/alternatives/d3d12.dll": "337ed97b9303192915e6edcac0310dca8817f72baa414dffa83d238cdb2ca724",
+}
+
+PAYLOAD_SHA256 = {
+    # --- 310.9（根目录，上游 0.3.1）---
+    "version.dll": "3d4c7d537a6e71e3a9d41ffc6487e054b26c56d27b7c0825d39eaa7ef0c7e86d",
+    "alternatives/winmm.dll": "40eaa7dff6eb6281917eb84aa1c6e580c9e69f8736b647d28decb561f6efd7eb",
+    "alternatives/dbghelp.dll": "13071d2a8cccd5a4707eedd5ccf00aee6df8b6aceba03e7c1dda9358f0f2c998",
+    "alternatives/dinput8.dll": "9f77a9070a7a3277f3d7e405e49e61de7e53101e2925f75bacd9cc204e14a0da",
+    "alternatives/dxgi.dll": "539138464137855f5962811588000a95897b3ddb14f5b44a197e37c3e17bd9fb",
+    "alternatives/d3d12.dll": "30b48198f0cd100827037bdbe27b2a15bc050ff1c276c520ffc41705920f07b1",
+    # --- 310.1（310.1/ 子目录，上游 0.3.1）---
+    "310.1/version.dll": "ca4146f76d4b176d17246d8c0e66042c57f7b25dcabea3200b33821522597211",
+    "310.1/alternatives/winmm.dll": "2312e761ee589204ddf4d402c1ae36367aa73d9bcd9fdfd9bbe56c06604a63e6",
+    "310.1/alternatives/dbghelp.dll": "c4679d28f69e5c99aec290725ef930a2fc58c657514f65f650efdbb0a308143c",
+    "310.1/alternatives/dinput8.dll": "94767cc139f8ecb6373765cd102cc85a28601cd55101f53ae854e61a4cbf4868",
+    "310.1/alternatives/dxgi.dll": "7dec971ff126f427b855d1238ff2b2ecb6ab7616c467776f882e7a4e244cc5b5",
+    "310.1/alternatives/d3d12.dll": "77860075059a630a90327e417cae7db6067ff56878ddb429d5d741c813dd4995",
 }
 
 
@@ -1405,7 +1426,7 @@ def build_ini(router: str, mult: int, bilinear: bool, level: int) -> str:
     """
     mult = max(2, min(6, int(mult or 2)))
     return (
-        f"; DLSSG SM86 0.3.0 - 由 {APP_NAME} {APP_VERSION} 生成\r\n"
+        f"; DLSSG SM86 0.3.1 - 由 {APP_NAME} {APP_VERSION} 生成\r\n"
         "; 修改后需要重启游戏才会生效。\r\n"
         "[General]\r\n"
         "; 1 = 启用帧生成（内嵌 Ampere 优化版 DLSS-G 运行库）；0 = 关闭（游戏自带 DLSS-G 原样加载）。\r\n"
@@ -1487,8 +1508,15 @@ def verify_payload(runtime: str = "") -> list[str]:
 
 
 def _all_known_hashes() -> set[str]:
-    """当前 payload 与历史版本的入口哈希合集（识别本项目部署）。"""
-    return set(PAYLOAD_SHA256.values()) | set(PAYLOAD_SHA256_LEGACY.values())
+    """当前 payload 与历史版本的入口哈希合集（识别本项目部署）。
+
+    含三部分：当前 0.3.1、上一版 0.3.0（PAYLOAD_SHA256_PREV）、
+    更早的 native 模式（PAYLOAD_SHA256_LEGACY）。升级部署时据此判定
+    「这是本项目写入的文件」，可直接覆盖而不误判为第三方文件。
+    """
+    return (set(PAYLOAD_SHA256.values())
+            | set(PAYLOAD_SHA256_PREV.values())
+            | set(PAYLOAD_SHA256_LEGACY.values()))
 
 
 def pick_entry(exe_dir: str, prefer: str = "") -> tuple[str, str]:
@@ -1664,7 +1692,7 @@ def restore(game: Game) -> tuple[bool, list[str]]:
         if f.is_file():
             try:
                 cur = sha256(f)
-                if cur == rec.get("dll_sha256") or cur in set(PAYLOAD_SHA256.values()):
+                if cur == rec.get("dll_sha256") or cur in _all_known_hashes():
                     f.unlink()
                     removed += 1
                     logs.append(tr('[移除] {0}').format(entry))

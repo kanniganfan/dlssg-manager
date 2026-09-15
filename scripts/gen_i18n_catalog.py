@@ -205,7 +205,7 @@ EN = {
     "六种入口名均已被其他程序占用，可在“高级”里手动指定": "All six proxy names are taken by other programs; pick one manually in \"Advanced\"",
     "SM75 · RTX 20 系（0.3.0 不支持）": "SM75 - RTX 20 series (not supported in 0.3.0)",
     "[错误] 上游 0.3.0 起出厂配置仅覆盖 RTX 30 系（SM86）；RTX 20 系的实验性 SM75 路由请使用旧版工具 v1.2.0（payload 0.2.4）。": "[Error] Since upstream 0.3.0 the bundled config only covers RTX 30 series (SM86). For the experimental SM75 route on RTX 20 series, use legacy tool v1.2.0 (payload 0.2.4).",
-    "SM86 内核 · 0.3.0": "SM86 kernels - 0.3.0",
+    "SM86 内核 · 0.3.1": "SM86 kernels - 0.3.0",
     "运行库": "Runtime",
     "渲染路径，高风险": "Render path (risky)",
     "自动选择（推荐）": "Auto (recommended)",
@@ -471,7 +471,6 @@ ZH_TW = {
     "六种入口名均已被其他程序占用，可在“高级”里手动指定": "六種入口名稱均已被其他程式佔用，可在「進階」裡手動指定",
     "SM75 · RTX 20 系（0.3.0 不支持）": "SM75 - RTX 20 系（0.3.0 不支援）",
     "[错误] 上游 0.3.0 起出厂配置仅覆盖 RTX 30 系（SM86）；RTX 20 系的实验性 SM75 路由请使用旧版工具 v1.2.0（payload 0.2.4）。": "[錯誤] 上游 0.3.0 起出廠配置僅覆蓋 RTX 30 系（SM86）；RTX 20 系的實驗性 SM75 路由請使用舊版工具 v1.2.0（payload 0.2.4）。",
-    "SM86 内核 · 0.3.0": "SM86 內核 - 0.3.0",
     "运行库": "執行庫",
     "渲染路径，高风险": "渲染路徑，高風險",
     "自动选择（推荐）": "自動選擇（建議）",
@@ -539,6 +538,7 @@ ZH_TW = {
     "第三选择": "第三選擇",
     "老输入栈游戏": "舊輸入堆疊遊戲",
     "渲染路径（高风险）": "渲染路徑（高風險）",
+    "SM86 内核 · 0.3.1": "SM86 核心 · 0.3.1",
 }
 
 

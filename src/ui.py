@@ -1381,7 +1381,7 @@ class MainWindow(QWidget):
 
         self.gpu_pill = Pill(tr('路由 {0}').format(self.gpu.route), "info" if self.gpu.supported else "warn")
         lay.addWidget(self.gpu_pill)
-        lay.addWidget(Pill(tr('SM86 内核 · 0.3.0'), "purple"))
+        lay.addWidget(Pill(tr('SM86 内核 · 0.3.1'), "purple"))
         return w
 
     # ------------------------------------------------- 左侧列表
@@ -2107,12 +2107,21 @@ class MainWindow(QWidget):
         self._update_vram()
 
     def _refresh_mult_seg(self) -> None:
-        """按当前运行库的倍率上限重建倍率段。"""
+        """按当前运行库的倍率上限重建倍率段。
+
+        默认选中 4X：上游 0.3.1 把出厂 MaxGeneratedFrames 由 5 改为 3（4X），
+        理由是自带 Dynamic MFG 的游戏会默认跑到上限、6X 对多数人偏高
+        （上游 issue #497/#499）。本工具默认值随之对齐。
+        切换运行库导致上限变化时，保留用户已选倍率，越界才钳到上限。
+        """
         cap = core.runtime_mult_cap(self._runtime())
         labels = [f"{m}X" for m in range(2, cap + 1)]
-        cur = self.seg_mult.value() if hasattr(self, "seg_mult") else 0
-        self.seg_mult.set_options(labels)
-        self.seg_mult.set_value(min(cur, len(labels) - 1))
+        if hasattr(self, "seg_mult") and self.seg_mult.group.buttons():
+            want = self._mult()               # 保留当前选择
+        else:
+            want = 4                          # 首次构建：对齐上游出厂 4X
+        want = max(2, min(want, cap))
+        self.seg_mult.set_options(labels, current=want - 2)
 
     def _mult(self) -> int:
         return {0: 2, 1: 3, 2: 4, 3: 5, 4: 6}.get(self.seg_mult.value(), 2)
