@@ -1,0 +1,8 @@
+fix: 修复扫描崩溃（entry_of_deployment 元组解包未同步）
+
+- entry_of_deployment 仍按 4 元组解包 ENTRIES，但 v1.4.0 已改为 5 元组，
+  导致扫描时抛 ValueError: too many values to unpack (expected 4)
+- 改用索引访问，并混用 _all_known_hashes() 以同时识别历史版本部署
+- 新增 scripts/check_tuple_arity.py：AST 静态自检，捕获「元组表加字段但
+  遍历点未同步」这类错误（本项目已犯两次，纳入构建前检查）
+- 版本 1.4.1
