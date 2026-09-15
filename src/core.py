@@ -27,7 +27,7 @@ import i18n
 from i18n import tr  # 多语言：中文字面量为源键，详见 i18n.py
 
 APP_NAME = "DLSSG Manager"
-APP_VERSION = "1.5.2"
+APP_VERSION = "1.5.3"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
 MOD_NAME = "DLSSG SM86 0.3.0"
 
@@ -169,12 +169,49 @@ def app_root() -> Path:
     return Path(__file__).resolve().parent
 
 
-def payload_dir() -> Path | None:
-    """定位运行包（version.dll + altnative/）。"""
+def payload_search_paths() -> list[Path]:
+    """按优先级列出所有会尝试的 payload 位置（供诊断输出）。
+
+    顺序：
+      1. exe 旁的 payload/            —— 安装器 / 便携包的标准布局
+      2. exe 旁                       —— payload 内容直接摊在 exe 旁边
+      3. 上一级的 payload/            —— exe 放在子目录里的情况
+      4. 上一级的 dlssg_sm86_pack/    —— 开发期工作区
+      5. %LOCALAPPDATA% 下的安装位置  —— 兜底
+    """
     root = app_root()
-    for cand in (root / "payload", root, root.parent / "dlssg_sm86_pack"):
-        if (cand / "version.dll").is_file():
-            return cand
+    cands: list[Path] = [
+        root / "payload",
+        root,
+        root.parent / "payload",
+        root.parent / "dlssg_sm86_pack",
+    ]
+    try:
+        import os
+        la = os.environ.get("LOCALAPPDATA", "")
+        if la:
+            cands.append(Path(la) / "Programs" / "DLSSG Manager" / "payload")
+            cands.append(Path(la) / "DLSSG Manager" / "payload")
+    except Exception:
+        pass
+    seen: set[str] = set()
+    out: list[Path] = []
+    for c in cands:
+        k = str(c).lower()
+        if k not in seen:
+            seen.add(k)
+            out.append(c)
+    return out
+
+
+def payload_dir() -> Path | None:
+    """定位运行包（version.dll 所在目录）。"""
+    for cand in payload_search_paths():
+        try:
+            if (cand / "version.dll").is_file():
+                return cand
+        except OSError:
+            continue
     return None
 
 
@@ -1417,7 +1454,10 @@ def verify_payload(runtime: str = "") -> list[str]:
     warns: list[str] = []
     src = payload_dir()
     if not src:
-        return [tr('未找到运行包目录，无法部署')]
+        # 附带已查找位置，把哑报错变成可自查（纯诊断文本，不进 i18n 词典）
+        tried = "；".join(str(p) for p in payload_search_paths())
+        return [tr('未找到运行包目录，无法部署'),
+                "已查找位置：" + tried]
 
     targets = [runtime] if runtime else [k for k, _p, _d in RUNTIMES]
     for rt in targets:

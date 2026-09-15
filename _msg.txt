@@ -1,25 +1,13 @@
-feat: 详情页自适应布局 + 窗口高度适配（v1.5.2）
+fix: payload 多路径查找 + 报错附诊断（v1.5.3）
 
-问题：窗口高度被压缩时详情页元素被裁剪、压扁、互相遮挡；
-固定宽度控件在窄窗口下也放不下。
+问题：构建产物 dist/ 里的 exe 旁边没有 payload，直接双击运行会报
+「未找到运行包目录，无法部署」，且报错不提示程序找了哪些位置，难以自查。
 
 修复：
-- 新增 FlowLayout（Qt 官方 FlowLayout 移植）+ FlowRow 容器：
-  自动换行布局，并在 resizeEvent 中把自身最小高度同步为
-  换行后的真实高度（QScrollArea 不采纳 heightForWidth，必须显式同步）
-- 新增 KVGrid 响应式网格：宽度够时多列，变窄自动降为单列；
-  实现 sizeHint / minimumSizeHint / heightForWidth，
-  并在 __init__ 先落一次单列避免首次布局高度塌陷为 0
-- 详情页外层套 QScrollArea：高度不足时整页可滚动，
-  充足时无滚动条，观感不变
-- 配置行（运行库/入口 DLL、插帧倍率/诊断日志）与操作按钮组
-  由 QHBoxLayout 改为 FlowRow，窄宽时自动换行
-- 下拉框由 setFixedWidth 改为 setMinimumWidth/setMaximumWidth
-- 窗口最小尺寸 960x700 -> 780x520，覆盖矮宽/窄高极端场景
+- 新增 payload_search_paths()：按优先级列出全部候选位置
+  （exe旁/payload、exe旁、上一级/payload、上一级/dlssg_sm86_pack、
+  %LOCALAPPDATA%/Programs/DLSSG Manager/payload），去重保序
+- payload_dir() 改为遍历该列表，任一命中即用
+- verify_payload() 未找到时附带「已查找位置」列表，把哑报错变成可自查
 
-实测（程序化校验，详情页四个尺寸全部 PASS）：
-- 1160x840 / 1400x520 / 820x980 / 780x520
-- 宽窗口 kv_grid 676x55（两列）；窄窗口 429x115（单列）
-- 按钮组无重叠，控件无零尺寸
-
-其他：修正 ui.py 缺少 QLayout / QLayoutItem 导入的问题。
+版本 1.5.3
