@@ -27,7 +27,7 @@ import i18n
 from i18n import tr  # 多语言：中文字面量为源键，详见 i18n.py
 
 APP_NAME = "DLSSG Manager"
-APP_VERSION = "1.5.1"
+APP_VERSION = "1.5.2"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
 MOD_NAME = "DLSSG SM86 0.3.0"
 

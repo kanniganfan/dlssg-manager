@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QCom
                                QFileDialog, QFrame, QGraphicsDropShadowEffect, QGridLayout,
                                QHBoxLayout, QLabel, QLineEdit, QMenu, QPlainTextEdit,
                                QPushButton, QScrollArea, QSizeGrip, QSizePolicy, QStackedWidget,
-                               QVBoxLayout, QWidget)
+                               QVBoxLayout, QWidget, QLayout, QLayoutItem)
 
 import core
 import i18n
@@ -108,6 +108,11 @@ QPushButton#seg:checked { background: ACCENT; color: #FFFFFF; }
 
 QScrollArea { background: transparent; border: none; }
 QScrollArea > QWidget > QWidget { background: transparent; }
+#detailScroll QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }
+#detailScroll QScrollBar::handle:vertical { background: #2E3648; border-radius: 5px; min-height: 28px; }
+#detailScroll QScrollBar::handle:vertical:hover { background: #3A4459; }
+#detailScroll QScrollBar::add-line:vertical, #detailScroll QScrollBar::sub-line:vertical { height: 0; }
+#detailScroll QScrollBar::add-page:vertical, #detailScroll QScrollBar::sub-page:vertical { background: transparent; }
 QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
 QScrollBar::handle:vertical { background: LINE2; border-radius: 5px; min-height: 32px; }
 QScrollBar::handle:vertical:hover { background: MUTED; }
@@ -323,6 +328,184 @@ class ElidedLabel(QLabel):
     def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
         self._apply()
+
+
+class FlowLayout(QLayout):
+    """自动换行布局：空间不足时把子控件换到下一行，而不是压缩/裁剪。
+
+    用于工具栏式横向排列（显卡伪装的控件组、操作按钮组等）。
+    移植自 Qt 官方 FlowLayout 示例，补上 heightForWidth 支持。
+    """
+
+    def __init__(self, parent=None, margin: int = 0, h_spacing: int = 8,
+                 v_spacing: int = 8):
+        super().__init__(parent)
+        self._items: list[QLayoutItem] = []
+        self._h = h_spacing
+        self._v = v_spacing
+        self.setContentsMargins(margin, margin, margin, margin)
+
+    # --- QLayout 必需接口 ---
+    def addItem(self, item) -> None:      # noqa: N802
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index):              # noqa: N802
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):              # noqa: N802
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):        # noqa: N802
+        return Qt.Orientations(0)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, width: int) -> int:   # noqa: N802
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect) -> None:  # noqa: N802
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self):                   # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self):                # noqa: N802
+        size = QSize()
+        for it in self._items:
+            size = size.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _do_layout(self, rect, test_only: bool) -> int:
+        m = self.contentsMargins()
+        eff = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x, y, line_h = eff.x(), eff.y(), 0
+        for it in self._items:
+            w = it.sizeHint().width()
+            h = it.sizeHint().height()
+            if w > eff.width() and eff.width() > 0:
+                w = eff.width()          # 单控件超宽时收缩到可用宽度
+            if x + w > eff.right() + 1 and line_h > 0:
+                x = eff.x()
+                y += line_h + self._v
+                line_h = 0
+            if not test_only:
+                it.setGeometry(QRect(QPoint(x, y), QSize(w, h)))
+            x += w + self._h
+            line_h = max(line_h, h)
+        return y + line_h - rect.y() + m.bottom()
+
+
+class FlowRow(QWidget):
+    """自动换行的横向行容器。
+
+    FlowLayout 只负责摆放；但 QScrollArea 不会采纳 heightForWidth，
+    换行后容器高度仍按单行算 -> 控件会重叠。这里在尺寸变化时把自身
+    最小高度同步为「按当前宽度换行后真实需要的高度」，从而在任意窄宽
+    下都不裁剪、不重叠，外层滚动容器自动出现滚动条。
+    """
+
+    def __init__(self, h_spacing: int = 10, v_spacing: int = 8, parent=None):
+        super().__init__(parent)
+        self._flow = FlowLayout(self, margin=0,
+                                h_spacing=h_spacing, v_spacing=v_spacing)
+
+    def add(self, w):
+        self._flow.addWidget(w)
+        return w
+
+    def _sync_height(self) -> None:
+        w = max(1, self.width())
+        h = self._flow.heightForWidth(w)
+        if h > 0 and h != self.minimumHeight():
+            self.setMinimumHeight(h)
+
+    def resizeEvent(self, e) -> None:      # noqa: N802
+        super().resizeEvent(e)
+        self._sync_height()
+
+    def showEvent(self, e) -> None:        # noqa: N802
+        super().showEvent(e)
+        self._sync_height()
+
+
+class KVGrid(QWidget):
+    """响应式键值网格：宽度够时多列，变窄时自动降为单列。
+
+    「渲染进程 / 安装目录 / 当前分辨率 / 反作弊 / 显存预算 / 部署状态」
+    六项在窄窗口下必须完整可见，不能挤压或省略，因此按可用宽度动态决定列数。
+
+    尺寸协商要点（此前高度塌陷为 0 的原因）：
+    - __init__ 里先按单列填充一次，保证 grid 永远有内容，sizeHint 不为空；
+    - 显式实现 sizeHint / minimumSizeHint，把 QGridLayout 的尺寸传上去；
+    - 声明 hasHeightForWidth + heightForWidth，换行导致高度变化时父布局能感知。
+    """
+
+    def __init__(self, items: list, min_col_w: int = 300, max_cols: int = 2):
+        super().__init__()
+        self._items = list(items)
+        self._min_col_w = min_col_w
+        self._max_cols = max(1, max_cols)
+        self._cols = 0
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setHorizontalSpacing(26)
+        self._grid.setVerticalSpacing(5)
+        for kv in self._items:
+            kv.setParent(self)
+        # 关键：先落一次单列，避免首次布局时 grid 为空 -> 高度 0
+        self._relayout(1)
+        self.setMinimumHeight(self._grid.minimumSize().height())
+
+    def _cols_for(self, width: int) -> int:
+        if width <= 0:
+            return 1
+        n = max(1, width // max(1, self._min_col_w))
+        return min(self._max_cols, n)
+
+    def _relayout(self, cols: int) -> None:
+        if cols == self._cols and self._grid.count():
+            return
+        self._cols = cols
+        while self._grid.count():
+            self._grid.takeAt(0)
+        for i, kv in enumerate(self._items):
+            self._grid.addWidget(kv, i // cols, i % cols)
+        for c in range(self._max_cols):
+            self._grid.setColumnStretch(c, 1 if c < cols else 0)
+        # 内容变化后同步最小高度，保证多行内容不被压扁
+        self.setMinimumHeight(self._grid.minimumSize().height())
+        self.updateGeometry()
+
+    def hasHeightForWidth(self) -> bool:   # noqa: N802
+        return True
+
+    def heightForWidth(self, w: int) -> int:   # noqa: N802
+        return self._grid.heightForWidth(w) if self._grid.hasHeightForWidth() \
+            else self._grid.sizeHint().height()
+
+    def sizeHint(self):                    # noqa: N802
+        if not self._grid.count():
+            self._relayout(1)
+        return self._grid.sizeHint()
+
+    def minimumSizeHint(self):             # noqa: N802
+        if not self._grid.count():
+            self._relayout(1)
+        return self._grid.minimumSize()
+
+    def resizeEvent(self, e) -> None:      # noqa: N802
+        super().resizeEvent(e)
+        self._relayout(self._cols_for(self.width()))
+
+    def showEvent(self, e) -> None:        # noqa: N802
+        super().showEvent(e)
+        self._relayout(self._cols_for(self.width()))
 
 
 class KV(QWidget):
@@ -832,7 +1015,9 @@ class MainWindow(QWidget):
         self.setWindowIcon(make_icon())
         # 默认高度提高：顶部新增系统栏（HAGS + 显卡伪装）后 720 偏挤，
         # 高度给到 840，同时抬高最小高度下限，保证游戏列表有充足展示空间。
-        self.setMinimumSize(960, 700)
+        # 顶部有 GPU 条 + 系统栏，详情页与侧栏各自可滚动，
+        # 因此最小尺寸可以下调，覆盖「矮宽 / 窄高」极端场景。
+        self.setMinimumSize(780, 520)
         self.resize(1160, 840)
         if not shot_mode:
             self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
@@ -1584,9 +1769,22 @@ class MainWindow(QWidget):
         return w
 
     def _build_game_page(self) -> QWidget:
+        """游戏详情页。
+
+        【自适应】外层套 QScrollArea：窗口变矮 / 分辨率降低 / 容器被压缩时
+        整页可滚动，任何元素都不会被裁剪、压扁或互相遮挡；
+        高度充足时（setWidgetResizable）不出现滚动条，观感与原来一致。
+        """
+        scroll = QScrollArea()
+        scroll.setObjectName("detailScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
         page = QWidget()
         lay = QVBoxLayout(page)
-        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setContentsMargins(0, 0, 8, 0)      # 右侧给滚动条留位
         lay.setSpacing(12)
 
         hero = QFrame()
@@ -1608,21 +1806,18 @@ class MainWindow(QWidget):
         self.h_sub.setObjectName("heroSub")
         hl.addWidget(self.h_sub)
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(26)
-        grid.setVerticalSpacing(5)
         self.kv_exe = KV(tr('渲染进程'), "—")
         self.kv_dir = KV(tr('安装目录'), "—")
         self.kv_res = KV(tr('当前分辨率'), "—")
         self.kv_ac = KV(tr('反作弊'), "—")
         self.kv_vram = KV(tr('显存预算'), "—")
         self.kv_state = KV(tr('部署状态'), "—")
-        for i, kv in enumerate((self.kv_exe, self.kv_dir, self.kv_res,
-                                self.kv_ac, self.kv_vram, self.kv_state)):
-            grid.addWidget(kv, i // 2, i % 2)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-        hl.addLayout(grid)
+        # 响应式网格：够宽两列，变窄自动降为单列，
+        # 六项信息在任何窗口尺寸下都完整可见（不截断、不重叠）。
+        self.kv_grid = KVGrid([self.kv_exe, self.kv_dir, self.kv_res,
+                               self.kv_ac, self.kv_vram, self.kv_state],
+                              min_col_w=320, max_cols=2)
+        hl.addWidget(self.kv_grid)
         lay.addWidget(hero)
 
         cfg = QFrame()
@@ -1634,76 +1829,81 @@ class MainWindow(QWidget):
         t1.setObjectName("cardTitle")
         cl.addWidget(t1)
 
-        r1 = QHBoxLayout()
-        r1.setSpacing(10)
+        # 配置行 1：运行库 + 入口 DLL。用 FlowRow 而非 QHBoxLayout，
+        # 窄宽时自动换行；下拉不再写死宽度，改为可伸缩（150~280）。
+        r1 = FlowRow(h_spacing=10, v_spacing=6)
         a = QLabel(tr('运行库'))
         a.setObjectName("kv")
         a.setMinimumWidth(max(66, a.sizeHint().width()))
-        r1.addWidget(a)
+        r1.add(a)
         self.cmb_runtime = Combo()
         for _rt, _pfx, desc in core.RUNTIMES:
             self.cmb_runtime.addItem(tr(desc), _rt)
-        self.cmb_runtime.setFixedWidth(224)
+        self.cmb_runtime.setMinimumWidth(150)
+        self.cmb_runtime.setMaximumWidth(280)
         self.cmb_runtime.setToolTip(
             tr('310.9 为最新运行库，支持 6X；310.1 为老版本，上限 4X。'
                '两套内嵌运行库与上游发布结构一致，可任选其一。'))
         self.cmb_runtime.currentIndexChanged.connect(lambda _i: self._on_runtime_changed())
-        r1.addWidget(self.cmb_runtime)
-        r1.addSpacing(14)
+        r1.add(self.cmb_runtime)
         b = QLabel(tr('入口 DLL'))
         b.setObjectName("kv")
         b.setMinimumWidth(max(66, b.sizeHint().width()))
-        r1.addWidget(b)
+        r1.add(b)
         self.cmb_entry = Combo()
         self._fill_entry_combo()
-        self.cmb_entry.setFixedWidth(214)
-        r1.addWidget(self.cmb_entry)
-        r1.addStretch(1)
-        cl.addLayout(r1)
+        self.cmb_entry.setMinimumWidth(150)
+        self.cmb_entry.setMaximumWidth(280)
+        r1.add(self.cmb_entry)
+        cl.addWidget(r1)
 
-        r2 = QHBoxLayout()
-        r2.setSpacing(10)
+        # 配置行 2：插帧倍率 + 诊断日志。同样走 FlowRow，窄宽自动换行。
+        r2 = FlowRow(h_spacing=10, v_spacing=6)
         c = QLabel(tr('插帧倍率'))
         c.setObjectName("kv")
         c.setMinimumWidth(max(66, c.sizeHint().width()))
-        r2.addWidget(c)
+        r2.add(c)
         self.seg_mult = Segmented(["2X", "3X", "4X", "5X", "6X"], 0)
         self._refresh_mult_seg()
         self.seg_mult.changed.connect(lambda _i: self._update_vram())
-        r2.addWidget(self.seg_mult)
-        r2.addStretch(1)
+        r2.add(self.seg_mult)
         e2 = QLabel(tr('诊断日志'))
         e2.setObjectName("kv")
         e2.setMinimumWidth(max(66, e2.sizeHint().width()))
-        r2.addWidget(e2)
+        r2.add(e2)
         self.sw_log = Switch(False)
-        r2.addWidget(self.sw_log)
-        cl.addLayout(r2)
+        r2.add(self.sw_log)
+        cl.addWidget(r2)
         lay.addWidget(cfg)
 
-        actions = QHBoxLayout()
-        actions.setSpacing(10)
+        # 操作按钮：窄宽时自动换行；主按钮给足最小宽度保证可点。
+        actions = FlowRow(h_spacing=10, v_spacing=8)
         self.btn_install = QPushButton(tr('一键启用插帧'))
         self.btn_install.setObjectName("primary")
         self.btn_install.setCursor(Qt.PointingHandCursor)
+        self.btn_install.setMinimumWidth(180)
+        self.btn_install.setMinimumHeight(34)
         self.btn_install.clicked.connect(self.do_install)
-        actions.addWidget(self.btn_install, 1)
+        actions.add(self.btn_install)
         self.btn_restore = QPushButton(tr('一键恢复'))
         self.btn_restore.setObjectName("danger")
         self.btn_restore.setCursor(Qt.PointingHandCursor)
+        self.btn_restore.setMinimumHeight(34)
         self.btn_restore.clicked.connect(self.do_restore)
-        actions.addWidget(self.btn_restore, 0)
+        actions.add(self.btn_restore)
         self.btn_open = QPushButton(tr('打开目录'))
         self.btn_open.setObjectName("ghost")
         self.btn_open.setCursor(Qt.PointingHandCursor)
+        self.btn_open.setMinimumHeight(34)
         self.btn_open.clicked.connect(self.open_dir)
-        actions.addWidget(self.btn_open, 0)
+        actions.add(self.btn_open)
         self.btn_copy = QPushButton(tr('复制路径'))
         self.btn_copy.setObjectName("ghost")
         self.btn_copy.setCursor(Qt.PointingHandCursor)
+        self.btn_copy.setMinimumHeight(34)
         self.btn_copy.clicked.connect(self.copy_path)
-        actions.addWidget(self.btn_copy, 0)
-        lay.addLayout(actions)
+        actions.add(self.btn_copy)
+        lay.addWidget(actions)
 
         self.hint = QLabel(
             tr('操作前请完全退出游戏。启用后重启游戏，在画面设置里打开帧生成并选择倍率；带反作弊的游戏请只在单机 / 离线模式下使用。恢复会清掉本工具写入的文件并还原备份。'))
@@ -1712,7 +1912,8 @@ class MainWindow(QWidget):
         lay.addWidget(self.hint)
 
         lay.addStretch(1)
-        return page
+        scroll.setWidget(page)
+        return scroll
 
     # ------------------------------------------------- 日志 / 提示
 

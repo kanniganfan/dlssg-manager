@@ -1,24 +1,25 @@
-feat: 载入动画内嵌化 + 窗口高度适配（v1.5.1）
+feat: 详情页自适应布局 + 窗口高度适配（v1.5.2）
 
-窗口尺寸：
-- 默认 1120x720 -> 1160x840，最小 940x620 -> 960x700
-  顶部新增系统栏（HAGS + 显卡伪装）后原有高度偏挤，游戏列表展示空间不足
+问题：窗口高度被压缩时详情页元素被裁剪、压扁、互相遮挡；
+固定宽度控件在窄窗口下也放不下。
 
-载入动画内嵌显示：
-- Splash 不再创建独立顶层窗口（原用 FramelessWindowHint|Window|Tool 弹出）
-- 改为作为主容器 RootFrame 的子控件内嵌，铺满 root 区域并置顶
-- 保留不透明自绘 + WA_OpaquePaintEvent，避免逐帧合成导致的重绘残缺
-- 移除顶层模式专用的跟随定时器
+修复：
+- 新增 FlowLayout（Qt 官方 FlowLayout 移植）+ FlowRow 容器：
+  自动换行布局，并在 resizeEvent 中把自身最小高度同步为
+  换行后的真实高度（QScrollArea 不采纳 heightForWidth，必须显式同步）
+- 新增 KVGrid 响应式网格：宽度够时多列，变窄自动降为单列；
+  实现 sizeHint / minimumSizeHint / heightForWidth，
+  并在 __init__ 先落一次单列避免首次布局高度塌陷为 0
+- 详情页外层套 QScrollArea：高度不足时整页可滚动，
+  充足时无滚动条，观感不变
+- 配置行（运行库/入口 DLL、插帧倍率/诊断日志）与操作按钮组
+  由 QHBoxLayout 改为 FlowRow，窄宽时自动换行
+- 下拉框由 setFixedWidth 改为 setMinimumWidth/setMaximumWidth
+- 窗口最小尺寸 960x700 -> 780x520，覆盖矮宽/窄高极端场景
 
-动画尺寸自适应：
-- 以 1120x720 为基准求缩放系数 k = min(w/BASE_W, h/BASE_H)，钳制在 0.55~2.2
-- 主字号由固定 46pt 改为 setPixelSize(62*k)，副标题 12*k
-- 中心光晕半径、字符上浮幅度、描边宽度、子标题间距、三个载入点
-  的位置与半径全部随 k 缩放
+实测（程序化校验，详情页四个尺寸全部 PASS）：
+- 1160x840 / 1400x520 / 820x980 / 780x520
+- 宽窗口 kv_grid 676x55（两列）；窄窗口 429x115（单列）
+- 按钮组无重叠，控件无零尺寸
 
-实测：
-- 1160x840 -> 动画画布 1120x800（k=1.000）
-- 1500x1000 -> 1460x960（k=1.304，整体放大）
-- 980x720 -> 940x680（k=0.839，整体缩小）
-- isWindow=False / parent=RootFrame，确认内嵌而非弹窗
-- 游戏列表高度由 278px 提升到 358px（默认窗口）
+其他：修正 ui.py 缺少 QLayout / QLayoutItem 导入的问题。
