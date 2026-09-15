@@ -27,7 +27,7 @@ import i18n
 from i18n import tr  # 多语言：中文字面量为源键，详见 i18n.py
 
 APP_NAME = "DLSSG Manager"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
 MOD_NAME = "DLSSG SM86 0.3.0"
 
@@ -1229,11 +1229,13 @@ def entry_of_deployment(exe_dir: str) -> tuple[str, bool]:
     """检查目录里是否已有本项目的部署。返回 (入口文件名, 是否确认属于本项目)。"""
     d = Path(exe_dir)
     has_ini = (d / INI_NAME).is_file()
-    for _key, fname, _rel, _desc in ENTRIES:
+    known = _all_known_hashes()
+    for item in ENTRIES:
+        fname = item[1]
         f = d / fname
         if f.is_file():
             try:
-                if sha256(f) in set(PAYLOAD_SHA256.values()):
+                if sha256(f) in known:
                     return fname, True
             except OSError:
                 pass
