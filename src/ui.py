@@ -267,6 +267,22 @@ class Segmented(QWidget):
             b.setChecked(True)
             self.changed.emit(i)
 
+    def set_options(self, options: list[str], current: int = 0) -> None:
+        """重建档位（运行库切换时倍率上限会变）。"""
+        lay = self.layout()
+        for b in list(self.group.buttons()):
+            self.group.removeButton(b)
+            lay.removeWidget(b)
+            b.deleteLater()
+        for i, opt in enumerate(options):
+            b = QPushButton(opt)
+            b.setObjectName("seg")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setChecked(i == current)
+            self.group.addButton(b, i)
+            lay.addWidget(b)
+
 
 class ElidedLabel(QLabel):
     """按【像素宽度】中段省略的标签。
@@ -1611,22 +1627,27 @@ class MainWindow(QWidget):
 
         r1 = QHBoxLayout()
         r1.setSpacing(10)
-        a = QLabel(tr('显卡路由'))
+        a = QLabel(tr('运行库'))
         a.setObjectName("kv")
         a.setMinimumWidth(max(66, a.sizeHint().width()))
         r1.addWidget(a)
-        self.cmb_router = Combo()
-        self.cmb_router.addItems([tr('自动（推荐）'), tr('SM86 · RTX 30 系'), tr('SM75 · RTX 20 系（0.3.0 不支持）')])
-        self.cmb_router.setFixedWidth(224)
-        r1.addWidget(self.cmb_router)
+        self.cmb_runtime = Combo()
+        for _rt, _pfx, desc in core.RUNTIMES:
+            self.cmb_runtime.addItem(tr(desc), _rt)
+        self.cmb_runtime.setFixedWidth(224)
+        self.cmb_runtime.setToolTip(
+            tr('310.9 为最新运行库，支持 6X；310.1 为老版本，上限 4X。'
+               '两套内嵌运行库与上游发布结构一致，可任选其一。'))
+        self.cmb_runtime.currentIndexChanged.connect(lambda _i: self._on_runtime_changed())
+        r1.addWidget(self.cmb_runtime)
         r1.addSpacing(14)
         b = QLabel(tr('入口 DLL'))
         b.setObjectName("kv")
         b.setMinimumWidth(max(66, b.sizeHint().width()))
         r1.addWidget(b)
         self.cmb_entry = Combo()
-        self.cmb_entry.addItems([tr('自动选择')] + [e[1] for e in core.ENTRIES])
-        self.cmb_entry.setFixedWidth(166)
+        self._fill_entry_combo()
+        self.cmb_entry.setFixedWidth(214)
         r1.addWidget(self.cmb_entry)
         r1.addStretch(1)
         cl.addLayout(r1)
@@ -1638,6 +1659,7 @@ class MainWindow(QWidget):
         c.setMinimumWidth(max(66, c.sizeHint().width()))
         r2.addWidget(c)
         self.seg_mult = Segmented(["2X", "3X", "4X", "5X", "6X"], 0)
+        self._refresh_mult_seg()
         self.seg_mult.changed.connect(lambda _i: self._update_vram())
         r2.addWidget(self.seg_mult)
         r2.addStretch(1)
@@ -1851,9 +1873,36 @@ class MainWindow(QWidget):
 
     # ------------------------------------------------- 操作
 
-    def _router(self) -> str:
-        i = self.cmb_router.currentIndex()
-        return {0: self.gpu.route, 1: "SM86", 2: "SM75"}[i]
+    def _runtime(self) -> str:
+        """当前选中的内嵌运行库版本（310.9 / 310.1）。"""
+        rt = self.cmb_runtime.currentData() if hasattr(self, "cmb_runtime") else ""
+        return rt or core.DEFAULT_RUNTIME
+
+    def _fill_entry_combo(self) -> None:
+        """入口下拉：按上游分层显示 —— 工具类优先，渲染路径单独标注。"""
+        self.cmb_entry.clear()
+        self.cmb_entry.addItem(tr('自动选择（推荐）'), "")
+        tool = [e for e in core.ENTRIES if e[4] == "tool"]
+        render = [e for e in core.ENTRIES if e[4] == "render"]
+        for e in tool:
+            self.cmb_entry.addItem(f"{e[1]}　· {tr(e[3])}", e[1])
+        for e in render:
+            self.cmb_entry.addItem(f"{e[1]}　· {tr('渲染路径，高风险')}", e[1])
+        idx = self.cmb_entry.findData("") if self.cmb_entry.count() else -1
+        self.cmb_entry.setCurrentIndex(max(0, idx))
+
+    def _on_runtime_changed(self) -> None:
+        """切换运行库：重建倍率档位（310.1 上限 4X）并刷新显存估算。"""
+        self._refresh_mult_seg()
+        self._update_vram()
+
+    def _refresh_mult_seg(self) -> None:
+        """按当前运行库的倍率上限重建倍率段。"""
+        cap = core.runtime_mult_cap(self._runtime())
+        labels = [f"{m}X" for m in range(2, cap + 1)]
+        cur = self.seg_mult.value() if hasattr(self, "seg_mult") else 0
+        self.seg_mult.set_options(labels)
+        self.seg_mult.set_value(min(cur, len(labels) - 1))
 
     def _mult(self) -> int:
         return {0: 2, 1: 3, 2: 4, 3: 5, 4: 6}.get(self.seg_mult.value(), 2)
@@ -1871,7 +1920,8 @@ class MainWindow(QWidget):
             self.kv_vram.set(tr('按最终输出分辨率预留 300–800 MiB'))
 
     def _entry(self) -> str:
-        return "" if self.cmb_entry.currentIndex() == 0 else self.cmb_entry.currentText()
+        """返回用户指定的入口；自动选择返回空串。"""
+        return (self.cmb_entry.currentData() or "") if hasattr(self, "cmb_entry") else ""
 
     def do_install(self) -> None:
         g = self.current
@@ -1883,9 +1933,9 @@ class MainWindow(QWidget):
             self._log(tr('[警告] 该游戏未检测到 nvngx_dlssg.dll，可能不支持帧生成；若游戏内置 DLSSG 能力仍可尝试'))
         self.btn_install.setEnabled(False)
         self.status.setText(tr('正在部署…'))
-        self.kw = ActionWorker(core.deploy, g, self._router(), self._mult(),
+        self.kw = ActionWorker(core.deploy, g, "SM86", self._mult(),
                                False, 2 if self.sw_log.isChecked() else 1,
-                               self._entry())
+                               self._entry(), False, self._runtime())
         self.kw.done.connect(self._on_install_done)
         self.kw.start()
 

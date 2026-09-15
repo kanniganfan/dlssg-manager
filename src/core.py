@@ -27,26 +27,39 @@ import i18n
 from i18n import tr  # 多语言：中文字面量为源键，详见 i18n.py
 
 APP_NAME = "DLSSG Manager"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
 MOD_NAME = "DLSSG SM86 0.3.0"
 
 INI_NAME = "dlssg_sm86.ini"
 LOG_DIR_NAME = "dlssg_sm86"
 
-# 入口 DLL：(内部键, 部署文件名, 包内相对路径, 说明)
+# 内嵌运行库版本（照搬上游两个发布包）：
+#   root    = 发布根目录，nvngx_dlssg 310.9，帧倍率上限 6X
+#   310.1   = 310.1/ 子目录，老版本运行库，帧倍率上限 4X
+RUNTIMES = [
+    ("310.9", "", "310.9 运行库（最新，支持 6X）"),
+    ("310.1", "310.1/", "310.1 运行库（老版本，上限 4X）"),
+]
+DEFAULT_RUNTIME = "310.9"
+
+# 入口 DLL：(内部键, 部署文件名, 包内相对路径, 说明, 分组)
+# 分组照上游 alternatives/README.md：
+#   tool = 工具类代理（最安全，优先用）
+#   render = 渲染路径代理（D3D12 热路径，加载顺序敏感，仅前几个都不行时用）
 ENTRIES = [
-    ("version", "version.dll", "version.dll", '默认入口'),
-    ("winmm", "winmm.dll", "alternatives/winmm.dll", '备用入口'),
-    ("dinput8", "dinput8.dll", "alternatives/dinput8.dll", '备用入口'),
-    ("dxgi", "dxgi.dll", "alternatives/dxgi.dll", '备用入口'),
-    ("d3d12", "d3d12.dll", "alternatives/d3d12.dll", '备用入口'),
-    ("dbghelp", "dbghelp.dll", "alternatives/dbghelp.dll", '备用入口'),
+    ("version", "version.dll", "version.dll", '默认入口（首选）', "tool"),
+    ("winmm", "winmm.dll", "alternatives/winmm.dll", '第二选择', "tool"),
+    ("dbghelp", "dbghelp.dll", "alternatives/dbghelp.dll", '第三选择', "tool"),
+    ("dinput8", "dinput8.dll", "alternatives/dinput8.dll", '老输入栈游戏', "tool"),
+    ("dxgi", "dxgi.dll", "alternatives/dxgi.dll", '渲染路径（高风险）', "render"),
+    ("d3d12", "d3d12.dll", "alternatives/d3d12.dll", '渲染路径（高风险）', "render"),
 ]
 
-# 运行包内文件校验和（与 GitHub 仓库 main 分支一致）
-# 旧版本（0.2.4 native 模式）的入口哈希：用于识别"本项目历史部署"，
-# 升级部署时允许直接覆盖，而不是误判为第三方文件跳到其它入口。
+# 渲染路径代理互斥：dxgi 与 d3d12 只能二选一
+RENDER_MUTEX = {"dxgi.dll", "d3d12.dll"}
+
+# 当前/历史版本入口哈希（识别本项目部署）。键为"包内相对路径去掉运行库前缀"。
 PAYLOAD_SHA256_LEGACY = {
     "version.dll": "c844646d835a7b88ed1382eea80403d38b433f8ac09cf92581c73698c44ae7c2",
     "altnative/winmm.dll": "1004dd4ee0edbe4e1af4c8c7b30d4786bea0f5e7c0412566996b4c2543ae7e36",
@@ -56,13 +69,50 @@ PAYLOAD_SHA256_LEGACY = {
 }
 
 PAYLOAD_SHA256 = {
+    # --- 310.9（根目录）---
     "version.dll": "a22d2453f25d7df3fdc0d6d683c21f01769a115439d58f1341183a75faaf8c7d",
     "alternatives/winmm.dll": "197f97e90541ae688d291ef388b1eddc0c55cb657603eb55dea2d3d178b1e384",
+    "alternatives/dbghelp.dll": "10e2fe2d84b8b674e184891ca5211b01c43c6700e1c8b8c6d4969286f653bff8",
     "alternatives/dinput8.dll": "01fdd5e77e64045400a2e7b6f35f98f3403335e30cd9def0e996f78240aa65da",
     "alternatives/dxgi.dll": "ae37150fe056f3388571481ad4aaf78fad720e9b52eb7e6e1e9d2dff85df841e",
     "alternatives/d3d12.dll": "63e7c3a1ba0b10e37e1a162ccf3aa2e19a0f7359de63787585c09baffd67ad45",
-    "alternatives/dbghelp.dll": "10e2fe2d84b8b674e184891ca5211b01c43c6700e1c8b8c6d4969286f653bff8",
+    # --- 310.1（310.1/ 子目录）---
+    "310.1/version.dll": "4646fe15a21c01d251865253f55cefd5892dd2e561ece0c8efa49ae78b5de32e",
+    "310.1/alternatives/winmm.dll": "dde7ec668130b09f807338c4c594609a75349860bb5ca4428797f6ab2175b9c1",
+    "310.1/alternatives/dbghelp.dll": "1537a207f6490f49373ac8164e2021e6f25bd212e4abc8564dfd8110ad3afe28",
+    "310.1/alternatives/dinput8.dll": "e87a61ef84f60b58e5f3b841006992a30d8fd2998096f065b317e7126ebccd9b",
+    "310.1/alternatives/dxgi.dll": "f8d823609f994861d27abf50c9cb78386202650f8da1c868eaa2a40f13feef70",
+    "310.1/alternatives/d3d12.dll": "337ed97b9303192915e6edcac0310dca8817f72baa414dffa83d238cdb2ca724",
 }
+
+
+def runtime_prefix(rt: str) -> str:
+    """运行库版本 -> 包内路径前缀（310.9 为根目录，310.1 为 310.1/）。"""
+    for key, prefix, _desc in RUNTIMES:
+        if key == rt:
+            return prefix
+    return ""
+
+
+def runtime_mult_cap(rt: str) -> int:
+    """运行库支持的帧倍率上限：310.9 = 6，310.1 = 4。"""
+    return 4 if rt == "310.1" else 6
+
+
+def runtime_label(rt: str) -> str:
+    for key, _prefix, desc in RUNTIMES:
+        if key == rt:
+            return desc
+    return rt
+
+
+def entry_group(entry_name: str) -> str:
+    """入口分组：tool（安全）/ render（渲染路径，高风险）。"""
+    for _k, fname, _rel, _d, grp in ENTRIES:
+        if fname.lower() == entry_name.lower():
+            return grp
+    return "tool"
+
 
 # 排除的 EXE 关键字：启动器、反作弊、安装器、录制工具、崩溃上报等，不是真正渲染进程
 EXE_BLACKLIST = (
@@ -1226,46 +1276,58 @@ def build_ini(router: str, mult: int, bilinear: bool, level: int) -> str:
     )
 
 
-def payload_for_entry(entry_name: str) -> tuple[Path | None, str]:
+def payload_for_entry(entry_name: str, runtime: str = "") -> tuple[Path | None, str]:
+    """按入口名 + 运行库版本解析 payload 内的源文件路径。"""
     src = payload_dir()
     if not src:
         return None, tr('未找到运行包（payload/version.dll），请确认程序目录完整')
-    for _key, fname, rel, _desc in ENTRIES:
+    prefix = runtime_prefix(runtime or DEFAULT_RUNTIME)
+    for item in ENTRIES:
+        fname, rel = item[1], item[2]
         if fname.lower() == entry_name.lower():
-            p = src / rel
-            return (p, "") if p.is_file() else (None, tr('运行包缺少 {0}').format(rel))
+            p = src / (prefix + rel)
+            if p.is_file():
+                return p, ""
+            return None, tr('运行包缺少 {0}').format(prefix + rel)
     return None, tr('未知入口 {0}').format(entry_name)
 
 
-def verify_payload() -> list[str]:
-    warns = []
+def verify_payload(runtime: str = "") -> list[str]:
+    """校验运行包完整性。
+
+    指定 runtime 时只校验该版本；未指定时校验全部版本，
+    并允许某个版本整体缺失（返回缺包提示而非逐文件报错）。
+    """
+    warns: list[str] = []
     src = payload_dir()
     if not src:
         return [tr('未找到运行包目录，无法部署')]
-    for rel, want in PAYLOAD_SHA256.items():
-        p = src / rel
-        if not p.is_file():
-            warns.append(tr('缺少文件 {0}').format(rel))
+
+    targets = [runtime] if runtime else [k for k, _p, _d in RUNTIMES]
+    for rt in targets:
+        prefix = runtime_prefix(rt)
+        rels = [prefix + item[2] for item in ENTRIES]
+        present = [r for r in rels if (src / r).is_file()]
+        if not present:
+            warns.append(tr('运行包缺少 {0} 整个版本目录').format(rt))
             continue
-        try:
-            got = sha256(p)
-        except OSError as e:
-            warns.append(tr('{0} 读取失败：{1}').format(rel, e))
-            continue
-        if got != want:
-            warns.append(tr('{0} 哈希不符（本地 {1}… / 期望 {2}…）').format(rel, got[:12], want[:12]))
+        for rel in rels:
+            p = src / rel
+            if not p.is_file():
+                warns.append(tr('缺少文件 {0}').format(rel))
+                continue
+            want = PAYLOAD_SHA256.get(rel)
+            if not want:
+                continue
+            try:
+                got = sha256(p)
+            except OSError as e:
+                warns.append(tr('{0} 读取失败：{1}').format(rel, e))
+                continue
+            if got != want:
+                warns.append(tr('{0} 哈希不符（本地 {1}… / 期望 {2}…）').format(
+                    rel, got[:12], want[:12]))
     return warns
-
-
-def _entry_filename(name: str) -> str:
-    """把入口键（version）或文件名（version.dll）统一成部署用的文件名。"""
-    n = (name or "").strip().lower()
-    if not n:
-        return ""
-    for key, fname, _rel, _desc in ENTRIES:
-        if n in (key, fname):
-            return fname
-    return n if n.endswith(".dll") else ""
 
 
 def _all_known_hashes() -> set[str]:
@@ -1274,8 +1336,14 @@ def _all_known_hashes() -> set[str]:
 
 
 def pick_entry(exe_dir: str, prefer: str = "") -> tuple[str, str]:
-    """挑一个可用入口：目标名已被别的程序占用时跳过，避免覆盖他人文件。"""
-    order = [e[1] for e in ENTRIES]
+    """挑一个可用入口。
+
+    顺序照上游 alternatives/README.md 的安全分层：
+      工具类（version → winmm → dbghelp → dinput8）优先；
+      渲染路径代理（dxgi / d3d12）不在自动选择内 —— 它们位于 D3D12 渲染热路径、
+      加载顺序敏感，只有工具类都不行时才由用户在「高级」里手动指定。
+    """
+    order = [e[1] for e in ENTRIES if e[4] == "tool"]
     if prefer:
         order = [prefer] + [x for x in order if x != prefer]
     for fname in order:
@@ -1287,7 +1355,17 @@ def pick_entry(exe_dir: str, prefer: str = "") -> tuple[str, str]:
                 return fname, ""  # 本项目当前/历史部署，可直接覆盖
         except OSError:
             pass
-    return "", tr('六种入口名均已被其他程序占用，可在“高级”里手动指定')
+    return "", tr('四种工具类入口名均已被其他程序占用；'
+                  '可在「高级」里手动指定渲染路径代理（dxgi / d3d12，'
+                  '二者只能选一个）')
+
+
+def _entry_filename(name: str) -> str:
+    """把入口名规范成 "xxx.dll" 形式。"""
+    if not name:
+        return ""
+    n = str(name).strip().lower()
+    return n if n.endswith(".dll") else f"{n}.dll"
 
 
 def _is_running(exe_path: str) -> bool:
@@ -1299,16 +1377,28 @@ def _is_running(exe_path: str) -> bool:
 
 
 def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
-           prefer_entry: str = "", force: bool = False) -> tuple[bool, list[str]]:
+           prefer_entry: str = "", force: bool = False,
+           runtime: str = "") -> tuple[bool, list[str]]:
+    """部署到游戏目录。
+
+    runtime: 内嵌运行库版本（310.9 / 310.1），照搬上游两个发布包的结构；
+             310.9 上限 6X，310.1 上限 4X。
+    router/bilinear: 仅保留以兼容旧调用方，0.3.0 代理模式已无对应 ini 键。
+    """
     logs: list[str] = []
-    if str(router).upper() == "SM75":
-        return False, [tr('[错误] 上游 0.3.0 起出厂配置仅覆盖 RTX 30 系（SM86）；'
-                          'RTX 20 系的实验性 SM75 路由请使用旧版工具 v1.2.0（payload 0.2.4）。')]
+    runtime = runtime or DEFAULT_RUNTIME
+    if runtime not in [k for k, _p, _d in RUNTIMES]:
+        return False, [tr('[错误] 未知运行库版本 {0}').format(runtime)]
+    cap = runtime_mult_cap(runtime)
+    if int(mult or 2) > cap:
+        logs.append(tr('[提示] {0} 上限为 {1}X，已钳制。').format(
+            runtime_label(runtime), cap))
+        mult = cap
     exe_dir = Path(game.exe_dir)
     if not exe_dir.is_dir():
         return False, [tr('[错误] 目录不存在：{0}').format(exe_dir)]
 
-    warns = verify_payload()
+    warns = verify_payload(runtime)
     logs += [tr('[警告] {0}').format(w) for w in warns]
     if any(tr('未找到运行包') in w or tr('缺少文件') in w for w in warns):
         return False, logs
@@ -1329,12 +1419,21 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
     if not entry:
         return False, logs + [tr('[错误] {0}').format(err)]
 
-    src, err = payload_for_entry(entry)
+    src, err = payload_for_entry(entry, runtime)
     if not src:
         return False, logs + [tr('[错误] {0}').format(err)]
 
     if _is_running(game.exe):
         return False, logs + [tr('[错误] 游戏正在运行（{0}），请先完全退出再操作').format(Path(game.exe).name)]
+
+    # 渲染路径代理互斥：dxgi 与 d3d12 只能留一个（上游 alternatives/README.md）
+    if entry in RENDER_MUTEX:
+        other = (RENDER_MUTEX - {entry}).pop()
+        if (exe_dir / other).exists():
+            return False, logs + [tr('[错误] {0} 与 {1} 不能同时存在；'
+                                     '请先移除另一个再部署。').format(entry, other)]
+        logs.append(tr('[警告] {0} 位于 D3D12 渲染热路径，加载顺序敏感，'
+                       '仅在工具类代理都不可用时使用。').format(entry))
 
     key = game_key(str(exe_dir))
     bdir = backups_dir() / key
@@ -1365,7 +1464,8 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
 
         ini_path.write_text(build_ini(router, mult, bilinear, level), encoding="utf-8")
         logs.append(f"[配置] {INI_NAME}：Optimized=1，MaxGeneratedFrames="
-                    f"{max(1, min(5, int(mult) - 1))}（最高 {max(2, min(6, int(mult)))}X），Preset=Auto")
+                    f"{max(1, min(5, int(mult) - 1))}（最高 {min(int(mult), cap)}X），"
+                    f"Preset=Auto，运行库 {runtime}")
     except PermissionError as e:
         return False, logs + [tr('[错误] 权限不足或被占用：{0}').format(e),
                               tr('[提示] 以管理员身份运行本程序，并确认游戏已完全退出')]
@@ -1374,13 +1474,14 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
 
     rec.update({
         "name": game.name, "exe_dir": str(exe_dir), "exe": game.exe, "entry": entry,
-        "dll_sha256": sha256(target), "installed_at": time.time(), "router": router,
-        "mult": mult, "level": level,
+        "dll_sha256": sha256(target), "installed_at": time.time(),
+        "runtime": runtime, "mult": mult, "level": level,
         "source": game.source, "engine": game.engine, "dlssg": game.dlssg,
     })
     st["games"][key] = rec
     save_state(st)
-    logs.append(tr('[完成] 已启用。重启游戏后进入画面设置，打开“帧生成”并选择倍率（游戏支持动态插帧时最高可选 6X）'))
+    logs.append(tr('[完成] 已启用（{0}）。重启游戏后进入画面设置，打开“帧生成”并选择倍率；'
+                   '游戏支持动态插帧时最高可选 {1}X。').format(runtime_label(runtime), cap))
     return True, logs
 
 
