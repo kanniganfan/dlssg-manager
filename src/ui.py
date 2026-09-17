@@ -70,6 +70,18 @@ QPushButton#ghost:hover { background: LINE2; border: 1px solid MUTED; }
 QPushButton#ghost:pressed { background: CARD; }
 QPushButton#ghost:disabled { color: DIM; background: CARD; border: 1px solid LINE; }
 
+/* 紧凑型 ghost：页脚等窄条区域用。
+   【为什么需要它】#ghost 的上下 padding 是 8px，加 2px 边框共占 18px。
+   页脚按钮曾被设成 setFixedHeight(24) —— 24-18=6px 留给文字，而 12px 字需要
+   至少 12px，于是中文上下各被裁掉一截（"检查更新" 看起来像缺笔画）。
+   这里把上下 padding 压到 4px（共 10px 占用），并把高度交给 minimumHeight，
+   让 sizeHint 始终能把字体行高算进去 —— 高 DPI 缩放放大字体时也不会裁。 */
+QPushButton#ghostSm { background: CARD2; border: 1px solid LINE2; border-radius: 8px;
+                      padding: 4px 12px; color: TEXT; font-size: 12px; font-weight: 500; }
+QPushButton#ghostSm:hover { background: LINE2; border: 1px solid MUTED; }
+QPushButton#ghostSm:pressed { background: CARD; }
+QPushButton#ghostSm:disabled { color: DIM; background: CARD; border: 1px solid LINE; }
+
 /* 标题栏更新徽标：只有检测到新版本时才显示，用强调色抓注意力 */
 QPushButton#updatePill { background: rgba(91,140,255,0.16); border: 1px solid rgba(91,140,255,0.42);
                          border-radius: 10px; padding: 3px 11px; color: ACCENT;
@@ -142,7 +154,7 @@ FOOT_FALLBACK_H = 34
 
 
 def toast_rest_y(root_h: int, foot_h: int, toast_h: int, gap: int = 10) -> int:
-    """toast 停止位置：完全落在页脚【上方】，不遮挡「检查更新 / 上游仓库」。
+    """toast 停止位置：完全落在页脚【上方】，不遮挡页脚按钮。
 
     抽成纯函数是为了可测 —— 离屏环境下 Qt 不会真正跑布局，
     foot_w.y() 恒为 0，只有把这段算术拿出来才能验证不变量。
@@ -708,13 +720,12 @@ class UpdateWorker(QThread):
 
     done = Signal(object)          # core.UpdateInfo
 
-    def __init__(self, include_upstream: bool = True, remember: bool = True):
+    def __init__(self, remember: bool = True):
         super().__init__()
-        self.include_upstream = include_upstream
         self.remember = remember
 
     def run(self) -> None:
-        info = core.check_update(include_upstream=self.include_upstream)
+        info = core.check_update()
         if self.remember:
             core.remember_update_check(info)
         self.done.emit(info)
@@ -1098,7 +1109,7 @@ class MainWindow(QWidget):
         root_lay.addLayout(body, 1)
 
         # 页脚包一层容器：toast 需要知道它的高度，才能浮在页脚【上方】，
-        # 否则会盖住「检查更新 / 上游仓库」按钮（曾经就是这样遮住的）。
+        # 否则会盖住页脚按钮（曾经就是这样遮住的）。
         self.foot_w = QWidget()
         foot = QHBoxLayout(self.foot_w)
         foot.setContentsMargins(0, 0, 0, 0)
@@ -1107,23 +1118,24 @@ class MainWindow(QWidget):
         foot.addWidget(self.status)
         foot.addStretch(1)
 
-        # 检查更新：放在页脚，不占用侧栏与详情页的空间
+        # 检查更新：放在页脚，不占用侧栏与详情页的空间。
+        # 用 #ghostSm（紧凑样式）+ minimumHeight —— 不要用 setFixedHeight：
+        # #ghost 的 8px 上下 padding 会把 24px 高的按钮内容区压到 6px，
+        # 中文上下各被裁一半（v1.7.1 的实测缺陷）。
         self.btn_check_update = QPushButton(tr('检查更新'))
-        self.btn_check_update.setObjectName("ghost")
-        self.btn_check_update.setFixedHeight(24)
+        self.btn_check_update.setObjectName("ghostSm")
         self.btn_check_update.setCursor(Qt.PointingHandCursor)
         self.btn_check_update.setToolTip(
-            tr('检查本工具与上游 Mod 是否有新版本（只读查询，不上传任何数据）'))
+            tr('检查是否有新版本（只读查询，不上传任何数据）'))
         self.btn_check_update.clicked.connect(self.check_update_manual)
         foot.addWidget(self.btn_check_update, 0, Qt.AlignVCenter)
 
-        self.btn_upstream = QPushButton(tr('上游仓库'))
-        self.btn_upstream.setObjectName("ghost")
-        self.btn_upstream.setFixedHeight(24)
-        self.btn_upstream.setCursor(Qt.PointingHandCursor)
-        self.btn_upstream.setToolTip(tr('在浏览器打开上游 dlssg_for_sm86 仓库'))
-        self.btn_upstream.clicked.connect(self.open_upstream_page)
-        foot.addWidget(self.btn_upstream, 0, Qt.AlignVCenter)
+        self.btn_repo = QPushButton(tr('项目主页'))
+        self.btn_repo.setObjectName("ghostSm")
+        self.btn_repo.setCursor(Qt.PointingHandCursor)
+        self.btn_repo.setToolTip(tr('在浏览器打开本项目的 GitHub 主页'))
+        self.btn_repo.clicked.connect(self.open_repo_page)
+        foot.addWidget(self.btn_repo, 0, Qt.AlignVCenter)
 
         hint = QLabel(tr('{0} · 仅供单机 / 非反作弊线上环境使用').format(core.MOD_NAME))
         hint.setStyleSheet(f"font-size:11px; color:{C['dim']};")
@@ -1821,7 +1833,7 @@ class MainWindow(QWidget):
         w = getattr(self, "update_worker", None)
         if w is not None and w.isRunning():
             return
-        self.update_worker = UpdateWorker(include_upstream=True, remember=not silent)
+        self.update_worker = UpdateWorker(remember=not silent)
         self.update_worker.done.connect(self._on_update_checked)
         self.update_worker.start()
 
@@ -1853,21 +1865,10 @@ class MainWindow(QWidget):
             self.tb_update.hide()
             self.status.setText(tr('已是最新版本'))
 
-        # 上游 mod 更新提示（与本工具版本独立）
-        if info.upstream_newer:
-            self._log(tr('[提示] 上游 Mod 有更新：{0}（本工具内嵌 0.3.2），'
-                         '可到上游仓库查看').format(info.upstream_version))
-
         if not silent:
             if info.is_newer:
-                notes = (info.notes or "").strip()
-                if len(notes) > 400:
-                    notes = notes[:400] + "…"
-                msg = tr('发现新版本 {0}（当前 {1}）').format(info.version, core.APP_VERSION)
-                self.toast_msg(msg, "info")
-            elif info.upstream_newer:
-                self.toast_msg(tr('本工具已是最新；上游 Mod 有更新 '
-                                  '{0}').format(info.upstream_version), "info")
+                self.toast_msg(tr('发现新版本 {0}（当前 {1}）').format(
+                    info.version, core.APP_VERSION), "info")
             else:
                 self.toast_msg(tr('已是最新版本（{0}）').format(core.APP_VERSION), "ok")
 
@@ -1882,12 +1883,13 @@ class MainWindow(QWidget):
             self._log(tr('[错误] {0}').format(err))
             self.toast_msg(err, "bad")
 
-    def open_upstream_page(self) -> None:
-        ok, err = core.open_url(core.UPSTREAM_PAGE)
+    def open_repo_page(self) -> None:
+        ok, err = core.open_url(core.REPO_PAGE)
         if ok:
-            self._log(tr('[提示] 已在浏览器打开上游仓库：{0}').format(core.UPSTREAM_PAGE))
+            self._log(tr('[提示] 已在浏览器打开项目主页：{0}').format(core.REPO_PAGE))
         else:
             self._log(tr('[错误] {0}').format(err))
+            self.toast_msg(err, "bad")
 
     # ------------------------------------------------- 右侧详情
 

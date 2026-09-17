@@ -13,7 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from PySide6.QtCore import QRect  # noqa: E402
-from PySide6.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget  # noqa: E402
 
 import core  # noqa: E402
 import ui  # noqa: E402
@@ -138,12 +138,12 @@ def main() -> int:
           f"{'全部通过' if not any('version_gt' in f for f in fails) else '有失败'}")
 
     # 2) 控件存在 + 默认隐藏（无更新时不占位）
-    for attr in ("tb_update", "btn_check_update", "btn_upstream"):
+    for attr in ("tb_update", "btn_check_update", "btn_repo"):
         if not hasattr(win, attr):
             fails.append(f"缺少控件 {attr}")
     print(f"  控件: tb_update={hasattr(win,'tb_update')} "
           f"btn_check_update={hasattr(win,'btn_check_update')} "
-          f"btn_upstream={hasattr(win,'btn_upstream')}")
+          f"btn_repo={hasattr(win,'btn_repo')}")
     if hasattr(win, "tb_update") and win.tb_update.isVisible():
         # shot_mode 下窗口未 show，isVisible 可能为 False；用 isHidden 判断更准
         pass
@@ -200,6 +200,50 @@ def main() -> int:
     else:
         print(f"  toast 定位 {len(cases)} 例: 全部落在页脚上方 OK")
     win.toast.hide()
+
+    # 7) 按钮文字不得被垂直裁剪（v1.7.1 实测缺陷：页脚按钮 24px 高、
+    #    #ghost 上下 padding 16px + 边框 2px，只剩 6px 给 12px 的字）
+    #    判据：sizeHint 高度必须 >= 字体行高 + 上下 padding + 边框。
+    from PySide6.QtGui import QFont, QFontMetrics
+    clip_bad = []
+    for pt in (9, 11, 13, 15):                 # 覆盖 100% / 125% / 150% / 175% 缩放
+        app.setFont(QFont("Microsoft YaHei UI", pt))
+        app.setStyleSheet(ui.qss())
+        fm = QFontMetrics(app.font())
+        for name, obj, text in (("检查更新", "ghostSm", "检查更新"),
+                                ("项目主页", "ghostSm", "项目主页")):
+            b = QPushButton(text)
+            b.setObjectName(obj)
+            b.ensurePolished()
+            h = b.sizeHint().height()
+            if h < fm.height():
+                clip_bad.append(f"{pt}pt/{name} sizeHint={h} < 字高 {fm.height()}")
+        # 页脚按钮不能再被固定高度锁死
+    app.setFont(QFont("Microsoft YaHei UI", 9))
+    app.setStyleSheet(ui.qss())
+    for attr in ("btn_check_update", "btn_repo"):
+        w = getattr(win, attr, None)
+        if w is None:
+            fails.append(f"缺少控件 {attr}")
+            continue
+        if w.maximumHeight() == w.minimumHeight() and w.maximumHeight() < 30:
+            fails.append(f"{attr} 仍被固定高度锁死（{w.maximumHeight()}px），会裁字")
+    if clip_bad:
+        fails.append(f"按钮文字会被裁剪: {clip_bad}")
+        print(f"  按钮文字裁剪: FAIL {clip_bad}")
+    else:
+        print("  按钮文字 4 种缩放下均不被裁剪 OK")
+
+    # 8) 上游检测已移除，仅保留软件自身检测
+    if hasattr(win, "btn_upstream"):
+        fails.append("btn_upstream 仍存在（应已移除上游检测）")
+    if hasattr(core, "UPSTREAM_API") or hasattr(core, "UPSTREAM_REPO"):
+        fails.append("core 仍保留 UPSTREAM_* 常量（应已移除上游检测）")
+    if hasattr(win, "open_upstream_page"):
+        fails.append("ui 仍保留 open_upstream_page（应已移除上游检测）")
+    if not (hasattr(win, "btn_repo") and hasattr(win, "open_repo_page")):
+        fails.append("缺少项目主页入口（btn_repo / open_repo_page）")
+    print("  上游检测已移除、项目主页入口就位 OK")
 
     print("\n=== INI 生成（档位落到文件） ===")
     for rt, t in (("310.9", 0), ("310.9", 1), ("310.9", 2), ("310.9", 3), ("310.1", 2)):

@@ -29,7 +29,7 @@ import i18n
 from i18n import tr  # 多语言：中文字面量为源键，详见 i18n.py
 
 APP_NAME = "DLSSG Manager"
-APP_VERSION = "1.7.1"
+APP_VERSION = "1.7.2"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
 MOD_NAME = "DLSSG SM86 0.3.2"
 
@@ -954,13 +954,9 @@ def vram_hint(width: int, height: int, mult: int) -> tuple[int, str] | None:
 UPDATE_REPO = "kanniganfan/dlssg-manager"
 UPDATE_API = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
 UPDATE_PAGE = f"https://github.com/{UPDATE_REPO}/releases/latest"
+REPO_PAGE = f"https://github.com/{UPDATE_REPO}"
 UPDATE_TIMEOUT = 8          # 秒；超时即视为检查失败，不阻塞界面
 UPDATE_CACHE_HOURS = 6      # 同一版本内的静默检查间隔（小时）
-
-# 上游 mod 的发布源（同时在界面上提示上游是否有新版本）
-UPSTREAM_REPO = "sdli1995/dlssg_for_sm86"
-UPSTREAM_API = f"https://api.github.com/repos/{UPSTREAM_REPO}/releases/latest"
-UPSTREAM_PAGE = f"https://github.com/{UPSTREAM_REPO}/releases"
 
 
 @dataclass
@@ -973,8 +969,6 @@ class UpdateInfo:
     url: str = UPDATE_PAGE           # 下载页
     notes: str = ""                  # Release 说明（可能为空）
     published: str = ""              # 发布时间（ISO 字符串，可能为空）
-    upstream_version: str = ""       # 上游 mod 的最新版本（可选）
-    upstream_newer: bool = False     # 上游是否高于本机内嵌的 0.3.2
     error: str = ""                  # 失败原因（ok=False 时有值）
 
 
@@ -1030,10 +1024,10 @@ def _short_error(e: Exception) -> str:
     return tr('检查失败：{0}').format(type(e).__name__)
 
 
-def check_update(include_upstream: bool = True) -> UpdateInfo:
-    """检查本工具（以及上游 mod）是否有新版本。
+def check_update() -> UpdateInfo:
+    """检查本工具是否有新版本。
 
-    只做只读 GET，不上传任何数据。任何失败都返回 ok=False + error，
+    只做一次只读 GET，不上传任何数据。任何失败都返回 ok=False + error，
     绝不抛异常 —— 调用方（后台线程）据此决定是否提示用户。
     """
     info = UpdateInfo()
@@ -1054,18 +1048,6 @@ def check_update(include_upstream: bool = True) -> UpdateInfo:
     info.url = str(data.get("html_url") or UPDATE_PAGE)
     info.notes = str(data.get("body") or "")
     info.published = str(data.get("published_at") or "")
-
-    if include_upstream:
-        try:
-            up = _http_json(UPSTREAM_API)
-            utag = str(up.get("tag_name") or "").strip()
-            if utag:
-                info.upstream_version = utag.lstrip("vV")
-                # 与内嵌 mod 版本比较（MOD_NAME 形如 "DLSSG SM86 0.3.2"）
-                mod_ver = MOD_NAME.rsplit(" ", 1)[-1]
-                info.upstream_newer = version_gt(info.upstream_version, mod_ver)
-        except Exception:                       # noqa: BLE001 - 上游查不到不影响主流程
-            pass
     return info
 
 
@@ -1114,8 +1096,6 @@ def remember_update_check(info: UpdateInfo) -> None:
         "checked_at": time.time(),
         "remote_version": info.version,
         "is_newer": info.is_newer,
-        "upstream_version": info.upstream_version,
-        "upstream_newer": info.upstream_newer,
         "ok": info.ok,
     })
 
@@ -2195,13 +2175,13 @@ def _cli(argv: list[str]) -> int:
         return 0 if ok else 1
 
     if "--update" in argv:
-        info = check_update(include_upstream="--no-upstream" not in argv)
+        info = check_update()
         print(json.dumps(asdict(info), ensure_ascii=False, indent=2))
         return 0 if info.ok else 1
 
     print(f"{APP_NAME} {APP_VERSION}")
     print("  --gpu                 显示显卡探测结果")
-    print("  --update              检查是否有新版本（--no-upstream 跳过上游检查）")
+    print("  --update              检查是否有新版本")
     print("  --hags [--on|--off]   查看 / 开启 / 关闭硬件加速 GPU 计划")
     print("  --scan [--deep <盘符>] 扫描游戏并输出 JSON")
     print("  --install <EXE目录> [--router SM86|SM75] [--mult 2|3|4] [--bilinear]"
