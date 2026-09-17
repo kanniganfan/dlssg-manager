@@ -64,6 +64,9 @@ QWidget { color: TEXT; font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif
 #kv { font-size: 12px; color: MUTED; }
 #kvVal { font-size: 12px; color: TEXT; }
 
+/* 档位说明：整行铺满，左内缩对齐到「一致性档位」标签右侧，字号略小、颜色次要 */
+#tierHint { font-size: 11px; color: MUTED; padding-left: 76px; }
+
 QPushButton#ghost { background: CARD2; border: 1px solid LINE2; border-radius: 10px;
                     padding: 8px 15px; color: TEXT; font-size: 12px; font-weight: 500; }
 QPushButton#ghost:hover { background: LINE2; border: 1px solid MUTED; }
@@ -434,6 +437,69 @@ class FlowLayout(QLayout):
             x += w + self._h
             line_h = max(line_h, h)
         return y + line_h - rect.y() + m.bottom()
+
+
+class PageBox(QWidget):
+    """详情页容器：把「按当前宽度换行后真实需要的高度」同步为最小高度。
+
+    【为什么必须要有这个类】
+    QScrollArea 配 setWidgetResizable(True) 时，会把内部 widget 拉伸到视口大小，
+    但**不会**尊重 widget 的最小高度 —— 只有当 widget.minimumHeight() 足够大时
+    才会出现纵向滚动条。而 QVBoxLayout.minimumSize() 对开了 wordWrap 的 QLabel
+    是失效的：QLabel 的 minimumSizeHint 只按**一行**计算（它可以窄到 1 个字换行），
+    于是整页的最小高度被严重低估（实测只剩 65px），布局便放心地把页面压到视口
+    高度，多出来的行被裁掉 —— 表现就是「操作前请完全退出游戏…」那段说明文字
+    只露出上半截，下面还有文字但看不见。
+
+    这里改为主动计算：遍历所有子项，对支持 heightForWidth 的按真实换行高度算，
+    其余用 sizeHint；再加上布局间距与边距，得到真实内容高度并设为最小高度。
+    宽度变化时重算，因此窄窗口（换行更多）也能正确撑开。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+    def _content_height(self, width: int) -> int:
+        lay = self.layout()
+        if lay is None:
+            return 0
+        m = lay.contentsMargins()
+        avail = max(1, width - m.left() - m.right())
+        total = m.top() + m.bottom()
+        n = 0
+        for i in range(lay.count()):
+            it = lay.itemAt(i)
+            if it is None:
+                continue
+            w = it.widget()
+            if w is not None and w.isHidden():
+                continue
+            if w is not None:
+                h = (w.heightForWidth(avail)
+                     if w.sizePolicy().hasHeightForWidth() else w.sizeHint().height())
+            else:
+                h = it.sizeHint().height()
+            # stretch 项（末尾留白）不贡献内容高度
+            if it.spacerItem() is not None:
+                continue
+            total += h
+            n += 1
+        if n > 1:
+            total += lay.spacing() * (n - 1)
+        return total
+
+    def _sync_min_height(self) -> None:
+        h = self._content_height(max(1, self.width()))
+        if h > 0 and h != self.minimumHeight():
+            self.setMinimumHeight(h)
+
+    def resizeEvent(self, e) -> None:      # noqa: N802
+        super().resizeEvent(e)
+        self._sync_min_height()
+
+    def showEvent(self, e) -> None:        # noqa: N802
+        super().showEvent(e)
+        self._sync_min_height()
 
 
 class FlowRow(QWidget):
@@ -1954,7 +2020,9 @@ class MainWindow(QWidget):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
-        page = QWidget()
+        # 用 PageBox 而非裸 QWidget：它会把「按当前宽度换行后的真实内容高度」
+        # 同步成最小高度，避免 QScrollArea 把页面压到视口高度而裁掉末尾的说明文字。
+        page = PageBox()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 0, 8, 0)      # 右侧给滚动条留位
         lay.setSpacing(12)
@@ -2049,23 +2117,26 @@ class MainWindow(QWidget):
 
         # 配置行 3：一致性档位（上游 0.3.2 的 [FrameGeneration] Optimized 0–3）。
         # 判据只有一条：允许生成的画面偏离官方运行库多远。档位越高越快。
+        # 说明文字单独占一整行（不放在 FlowRow 里）—— 放进 FlowRow 时它只能拿到
+        # 剩余宽度，中英文都会折成 3 行且断在「（不再 / 是逐位一致」这种词中间，
+        # 既不美观也难读。整行铺满后中英文都只占 1~2 行。
         r3 = FlowRow(h_spacing=10, v_spacing=6)
         d = QLabel(tr('一致性档位'))
         d.setObjectName("kv")
         d.setMinimumWidth(max(66, d.sizeHint().width()))
         r3.add(d)
-        # 说明标签必须先建：_refresh_tier_seg() 会通过 _update_tier_hint() 写它，
-        # 若顺序颠倒，首次构建时标签还不存在，说明文字会一直是空的。
-        self.lb_tier = QLabel("")
-        self.lb_tier.setObjectName("kvval")
-        self.lb_tier.setWordWrap(True)
         self.seg_tier = Segmented([f"{i}" for i in range(core.TIER_MIN, core.TIER_MAX + 1)],
                                   core.DEFAULT_TIER)
         self.seg_tier.changed.connect(lambda _i: self._on_tier_changed())
+        # 说明标签必须在 _refresh_tier_seg() 之前建好：后者会通过
+        # _update_tier_hint() 写它，顺序颠倒会导致首次构建说明恒为空。
+        self.lb_tier = QLabel("")
+        self.lb_tier.setObjectName("tierHint")
+        self.lb_tier.setWordWrap(True)
         self._refresh_tier_seg()          # 应用运行库上限 + 写档位说明
         r3.add(self.seg_tier)
-        r3.add(self.lb_tier)
         cl.addWidget(r3)
+        cl.addWidget(self.lb_tier)
         lay.addWidget(cfg)
 
         # 操作按钮：窄宽时自动换行；主按钮给足最小宽度保证可点。
@@ -2360,14 +2431,18 @@ class MainWindow(QWidget):
         self._update_tier_hint()
 
     def _update_tier_hint(self) -> None:
-        """把档位含义写清楚：逐位一致 vs 有损，用户才知道自己在选什么。"""
+        """把档位含义写清楚：逐位一致 vs 有损，用户才知道自己在选什么。
+
+        注意别和 tier_label 重复 —— 档位 2/3 的标签里已经写了「有损」，
+        这里只需补充「不再逐位一致」这一层信息，否则会读成「有损…画质有损」。
+        """
         if not hasattr(self, "lb_tier"):
             return
         t = self._tier()
         cap = self._tier_cap()
         text = tr(core.tier_label(t))
         if t >= 2:
-            text += tr('（不再是逐位一致，画质有损）')
+            text += tr('，不再是逐位一致')
         if cap == 1:
             text += tr('；310.1 无有损内核，仅支持档位 0–1')
         self.lb_tier.setText(text)
