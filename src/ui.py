@@ -70,6 +70,14 @@ QPushButton#ghost:hover { background: LINE2; border: 1px solid MUTED; }
 QPushButton#ghost:pressed { background: CARD; }
 QPushButton#ghost:disabled { color: DIM; background: CARD; border: 1px solid LINE; }
 
+/* 标题栏更新徽标：只有检测到新版本时才显示，用强调色抓注意力 */
+QPushButton#updatePill { background: rgba(91,140,255,0.16); border: 1px solid rgba(91,140,255,0.42);
+                         border-radius: 10px; padding: 3px 11px; color: ACCENT;
+                         font-size: 11px; font-weight: 600; }
+QPushButton#updatePill:hover { background: rgba(91,140,255,0.26);
+                               border: 1px solid rgba(91,140,255,0.62); }
+QPushButton#updatePill:pressed { background: rgba(91,140,255,0.32); }
+
 QComboBox#langSel { background: CARD2; border: 1px solid LINE2; border-radius: 10px;
                     padding: 4px 26px 4px 12px; color: TEXT; font-size: 12px; }
 QComboBox#langSel:hover { background: LINE2; border: 1px solid MUTED; }
@@ -127,6 +135,21 @@ QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 #sectionLabel { font-size: 11px; color: DIM; }
 #hagsCard { background: CARD; border: 1px solid LINE; border-radius: 12px; }
 """
+
+
+# 页脚未完成布局时的兜底高度（离屏测试 / 首帧定位用）
+FOOT_FALLBACK_H = 34
+
+
+def toast_rest_y(root_h: int, foot_h: int, toast_h: int, gap: int = 10) -> int:
+    """toast 停止位置：完全落在页脚【上方】，不遮挡「检查更新 / 上游仓库」。
+
+    抽成纯函数是为了可测 —— 离屏环境下 Qt 不会真正跑布局，
+    foot_w.y() 恒为 0，只有把这段算术拿出来才能验证不变量。
+    """
+    foot_h = max(0, min(int(foot_h or 0), int(root_h or 0)))
+    y = int(root_h) - foot_h - int(toast_h) - int(gap)
+    return max(8, y)
 
 
 def qss() -> str:
@@ -676,6 +699,27 @@ class ActionWorker(QThread):
             self.done.emit(False, [], f"{type(e).__name__}: {e}")
 
 
+class UpdateWorker(QThread):
+    """后台检查更新。
+
+    网络请求一律放在线程里：即使网络不可达、被墙或超时，
+    界面也不会卡住（core.check_update 内部已兜住所有异常）。
+    """
+
+    done = Signal(object)          # core.UpdateInfo
+
+    def __init__(self, include_upstream: bool = True, remember: bool = True):
+        super().__init__()
+        self.include_upstream = include_upstream
+        self.remember = remember
+
+    def run(self) -> None:
+        info = core.check_update(include_upstream=self.include_upstream)
+        if self.remember:
+            core.remember_update_check(info)
+        self.done.emit(info)
+
+
 # ---------------------------------------------------------------- 主窗口
 
 class TrafficLights(QWidget):
@@ -1053,18 +1097,41 @@ class MainWindow(QWidget):
         body.addWidget(self._build_detail(), 1)
         root_lay.addLayout(body, 1)
 
-        foot = QHBoxLayout()
+        # 页脚包一层容器：toast 需要知道它的高度，才能浮在页脚【上方】，
+        # 否则会盖住「检查更新 / 上游仓库」按钮（曾经就是这样遮住的）。
+        self.foot_w = QWidget()
+        foot = QHBoxLayout(self.foot_w)
+        foot.setContentsMargins(0, 0, 0, 0)
         self.status = QLabel(tr('就绪'))
         self.status.setStyleSheet(f"font-size:11px; color:{C['dim']};")
         foot.addWidget(self.status)
         foot.addStretch(1)
+
+        # 检查更新：放在页脚，不占用侧栏与详情页的空间
+        self.btn_check_update = QPushButton(tr('检查更新'))
+        self.btn_check_update.setObjectName("ghost")
+        self.btn_check_update.setFixedHeight(24)
+        self.btn_check_update.setCursor(Qt.PointingHandCursor)
+        self.btn_check_update.setToolTip(
+            tr('检查本工具与上游 Mod 是否有新版本（只读查询，不上传任何数据）'))
+        self.btn_check_update.clicked.connect(self.check_update_manual)
+        foot.addWidget(self.btn_check_update, 0, Qt.AlignVCenter)
+
+        self.btn_upstream = QPushButton(tr('上游仓库'))
+        self.btn_upstream.setObjectName("ghost")
+        self.btn_upstream.setFixedHeight(24)
+        self.btn_upstream.setCursor(Qt.PointingHandCursor)
+        self.btn_upstream.setToolTip(tr('在浏览器打开上游 dlssg_for_sm86 仓库'))
+        self.btn_upstream.clicked.connect(self.open_upstream_page)
+        foot.addWidget(self.btn_upstream, 0, Qt.AlignVCenter)
+
         hint = QLabel(tr('{0} · 仅供单机 / 非反作弊线上环境使用').format(core.MOD_NAME))
         hint.setStyleSheet(f"font-size:11px; color:{C['dim']};")
         foot.addWidget(hint)
         grip = QSizeGrip(self.root)
         grip.setFixedSize(14, 14)
         foot.addWidget(grip, 0, Qt.AlignBottom)
-        root_lay.addLayout(foot)
+        root_lay.addWidget(self.foot_w)
 
         self.toast = QLabel("", self.root)
         self.toast.setObjectName("toast")
@@ -1101,6 +1168,12 @@ class MainWindow(QWidget):
                 self._log(tr('[提示] 运行包校验通过（{0}）').format(pd))
         core.detect_hags(force=True)
         self._init_ready = True
+        # 静默更新检查：延迟到界面起来之后再排队，避免拖慢启动
+        self._start_auto_update_check()
+
+    def _start_auto_update_check(self) -> None:
+        """在启动扫描之后排队做一次静默更新检查（不阻塞界面）。"""
+        QTimer.singleShot(2500, self.check_update_auto)
 
     def _mount_splash(self) -> None:
         """载入动画【内嵌】在主窗口内显示（不弹独立窗口）。
@@ -1271,6 +1344,15 @@ class MainWindow(QWidget):
         self.tb_hags = Pill(tr('HAGS 检测中'), "muted")
         self.tb_hags.setToolTip(tr('硬件加速 GPU 计划状态'))
         lay.addWidget(self.tb_hags, 0, Qt.AlignVCenter)
+
+        # 更新提醒：仅在检测到新版本时出现，点击打开下载页。
+        # 平时完全隐藏，不占据标题栏空间。
+        self.tb_update = QPushButton(tr('有新版本 v{0}').format(""))
+        self.tb_update.setObjectName("updatePill")
+        self.tb_update.setCursor(Qt.PointingHandCursor)
+        self.tb_update.clicked.connect(self.open_download_page)
+        self.tb_update.hide()
+        lay.addWidget(self.tb_update, 0, Qt.AlignVCenter)
 
         bar.mousePressEvent = self._tb_press
         bar.mouseMoveEvent = self._tb_move
@@ -1719,6 +1801,94 @@ class MainWindow(QWidget):
             self._log(tr('[错误] 无法打开设置页面：{0}').format(e))
             self.toast_msg(tr('打开设置页失败，请手动到 设置 → 系统 → 屏幕 → 图形设置'), "warn")
 
+    # ------------------------------------------------- 更新检测
+
+    def check_update_auto(self) -> None:
+        """启动时的静默检查：命中缓存间隔就跳过，失败也不打扰用户。"""
+        if not core.should_auto_check(core.load_state()):
+            return
+        self._start_update_check(silent=True)
+
+    def check_update_manual(self) -> None:
+        """用户主动点击「检查更新」：无论结果如何都给反馈。"""
+        self.btn_check_update.setEnabled(False)
+        self.status.setText(tr('正在检查更新…'))
+        self._start_update_check(silent=False)
+
+    def _start_update_check(self, silent: bool) -> None:
+        self._update_silent = silent
+        # 同一时刻只跑一个检查线程
+        w = getattr(self, "update_worker", None)
+        if w is not None and w.isRunning():
+            return
+        self.update_worker = UpdateWorker(include_upstream=True, remember=not silent)
+        self.update_worker.done.connect(self._on_update_checked)
+        self.update_worker.start()
+
+    def _on_update_checked(self, info) -> None:
+        silent = getattr(self, "_update_silent", False)
+        if hasattr(self, "btn_check_update"):
+            self.btn_check_update.setEnabled(True)
+
+        if not info.ok:
+            # 静默检查失败：只写日志，不弹提示（离线 / 被墙属正常情况）
+            self._log(tr('[提示] 更新检查未完成：{0}').format(info.error))
+            if not silent:
+                self.status.setText(tr('更新检查失败'))
+                self.toast_msg(tr('更新检查失败：{0}').format(info.error), "warn")
+            return
+
+        self._update_info = info
+        self._log(tr('[提示] 更新检查：当前 {0}，最新 {1}').format(
+            core.APP_VERSION, info.version))
+
+        if info.is_newer:
+            self.tb_update.setText(tr('有新版本 v{0}').format(info.version))
+            self.tb_update.setToolTip(
+                tr('发现新版本 {0}（当前 {1}）。点击打开下载页。').format(
+                    info.version, core.APP_VERSION))
+            self.tb_update.show()
+            self.status.setText(tr('发现新版本 v{0}').format(info.version))
+        else:
+            self.tb_update.hide()
+            self.status.setText(tr('已是最新版本'))
+
+        # 上游 mod 更新提示（与本工具版本独立）
+        if info.upstream_newer:
+            self._log(tr('[提示] 上游 Mod 有更新：{0}（本工具内嵌 0.3.2），'
+                         '可到上游仓库查看').format(info.upstream_version))
+
+        if not silent:
+            if info.is_newer:
+                notes = (info.notes or "").strip()
+                if len(notes) > 400:
+                    notes = notes[:400] + "…"
+                msg = tr('发现新版本 {0}（当前 {1}）').format(info.version, core.APP_VERSION)
+                self.toast_msg(msg, "info")
+            elif info.upstream_newer:
+                self.toast_msg(tr('本工具已是最新；上游 Mod 有更新 '
+                                  '{0}').format(info.upstream_version), "info")
+            else:
+                self.toast_msg(tr('已是最新版本（{0}）').format(core.APP_VERSION), "ok")
+
+    def open_download_page(self) -> None:
+        """打开当前已知的下载页（有更新用新版本页，否则用 Releases 页）。"""
+        info = getattr(self, "_update_info", None)
+        url = info.url if (info and info.url) else core.UPDATE_PAGE
+        ok, err = core.open_url(url)
+        if ok:
+            self._log(tr('[提示] 已在浏览器打开下载页：{0}').format(url))
+        else:
+            self._log(tr('[错误] {0}').format(err))
+            self.toast_msg(err, "bad")
+
+    def open_upstream_page(self) -> None:
+        ok, err = core.open_url(core.UPSTREAM_PAGE)
+        if ok:
+            self._log(tr('[提示] 已在浏览器打开上游仓库：{0}').format(core.UPSTREAM_PAGE))
+        else:
+            self._log(tr('[错误] {0}').format(err))
+
     # ------------------------------------------------- 右侧详情
 
     def _build_detail(self) -> QWidget:
@@ -1958,9 +2128,10 @@ class MainWindow(QWidget):
         self.toast.setText(msg)
         self.toast.adjustSize()
         w = self.root.width()
-        h = self.root.height()
         x = (w - self.toast.width()) // 2
-        y0, y1 = h - 10, h - 56
+        foot_h = self.foot_w.height() if hasattr(self, "foot_w") else FOOT_FALLBACK_H
+        y1 = toast_rest_y(self.root.height(), foot_h, self.toast.height())
+        y0 = y1 + 46                      # 从下方滑入
         self.toast.move(x, y0)
         self.toast.show()
         self.toast.raise_()

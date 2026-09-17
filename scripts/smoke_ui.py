@@ -124,6 +124,83 @@ def main() -> int:
             fails.append(f"FlowRow@{width}: {'; '.join(bad)}")
         row.deleteLater()
 
+    print("\n=== 更新检测 ===")
+    # 1) 版本比较
+    vcases = [("1.7.2", "1.7.1", True), ("1.7.1", "1.7.1", False),
+              ("1.7.0", "1.7.1", False), ("v1.8.0", "1.7.1", True),
+              ("1.7", "1.7.0", False), ("1.7.1.1", "1.7.1", True),
+              ("2.0.0", "1.9.9", True), ("", "1.7.1", False)]
+    for a, b, exp in vcases:
+        got = core.version_gt(a, b)
+        if got != exp:
+            fails.append(f"version_gt({a!r},{b!r})={got} 期望 {exp}")
+    print(f"  版本比较 {len(vcases)} 例: "
+          f"{'全部通过' if not any('version_gt' in f for f in fails) else '有失败'}")
+
+    # 2) 控件存在 + 默认隐藏（无更新时不占位）
+    for attr in ("tb_update", "btn_check_update", "btn_upstream"):
+        if not hasattr(win, attr):
+            fails.append(f"缺少控件 {attr}")
+    print(f"  控件: tb_update={hasattr(win,'tb_update')} "
+          f"btn_check_update={hasattr(win,'btn_check_update')} "
+          f"btn_upstream={hasattr(win,'btn_upstream')}")
+    if hasattr(win, "tb_update") and win.tb_update.isVisible():
+        # shot_mode 下窗口未 show，isVisible 可能为 False；用 isHidden 判断更准
+        pass
+    if hasattr(win, "tb_update") and not win.tb_update.isHidden():
+        fails.append("tb_update 默认应为隐藏（未检测到更新时不应占位）")
+    else:
+        print("  tb_update 默认隐藏: OK")
+
+    # 3) 模拟「有新版本」→ 徽标应出现且文字带版本号
+    fake = core.UpdateInfo(ok=True, version="9.9.9", is_newer=True,
+                           url="https://example.invalid/x", published="2026-01-01T00:00:00Z")
+    win._update_silent = False
+    win._on_update_checked(fake)
+    app.processEvents()
+    shown = not win.tb_update.isHidden()
+    text = win.tb_update.text()
+    print(f"  模拟有更新: 徽标可见={shown} 文字={text!r}")
+    if not shown:
+        fails.append("检测到新版本后徽标未显示")
+    if "9.9.9" not in text:
+        fails.append(f"徽标文字未含版本号: {text!r}")
+
+    # 4) 模拟「已是最新」→ 徽标应重新隐藏
+    same = core.UpdateInfo(ok=True, version=core.APP_VERSION, is_newer=False)
+    win._on_update_checked(same)
+    app.processEvents()
+    if not win.tb_update.isHidden():
+        fails.append("已是最新时徽标应隐藏")
+    else:
+        print("  模拟已最新: 徽标隐藏 OK")
+
+    # 5) 模拟「检查失败」→ 不崩、不弹徽标、给出错误提示
+    bad = core.UpdateInfo(ok=False, error="连接超时")
+    win._on_update_checked(bad)
+    app.processEvents()
+    if not win.tb_update.isHidden():
+        fails.append("检查失败时不应显示更新徽标")
+    else:
+        print("  模拟检查失败: 徽标保持隐藏 OK（仅日志提示）")
+
+    # 6) toast 不得盖住页脚（曾经盖住「检查更新 / 上游仓库」）
+    #    离屏下 Qt 不会真正跑布局，foot_w.y() 恒为 0，比较控件几何等于假通过；
+    #    这里直接验证抽出来的定位算法在多种尺寸下都成立。
+    cases = [(840, 34, 34), (520, 34, 34), (900, 34, 60), (300, 34, 34),
+             (840, 0, 34), (840, 480, 34)]
+    bad_pos = []
+    for rh, fh, th in cases:
+        y = ui.toast_rest_y(rh, fh, th)
+        if y < 8 or y + th > max(0, rh - min(fh, rh)):
+            bad_pos.append(f"root={rh} foot={fh} toast={th} -> y={y}")
+    if bad_pos:
+        fails.append(f"toast 定位会压到页脚: {bad_pos}")
+        print(f"  toast 定位: FAIL {bad_pos}")
+    else:
+        print(f"  toast 定位 {len(cases)} 例: 全部落在页脚上方 OK")
+    win.toast.hide()
+
     print("\n=== INI 生成（档位落到文件） ===")
     for rt, t in (("310.9", 0), ("310.9", 1), ("310.9", 2), ("310.9", 3), ("310.1", 2)):
         txt = core.build_ini("SM86", 4, False, 1, t, rt)

@@ -15,6 +15,8 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
@@ -27,7 +29,7 @@ import i18n
 from i18n import tr  # 多语言：中文字面量为源键，详见 i18n.py
 
 APP_NAME = "DLSSG Manager"
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.7.1"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
 MOD_NAME = "DLSSG SM86 0.3.2"
 
@@ -945,6 +947,192 @@ def vram_hint(width: int, height: int, mult: int) -> tuple[int, str] | None:
     return VRAM_TABLE[best].get(mult), label
 
 
+# ---------------------------------------------------------------- 更新检测
+
+# 发布源：本项目的 GitHub 仓库（Release 即发行产物所在处）。
+# 只读取公开的 REST API，不带任何本机信息；请求是「检查更新」的唯一联网行为。
+UPDATE_REPO = "kanniganfan/dlssg-manager"
+UPDATE_API = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
+UPDATE_PAGE = f"https://github.com/{UPDATE_REPO}/releases/latest"
+UPDATE_TIMEOUT = 8          # 秒；超时即视为检查失败，不阻塞界面
+UPDATE_CACHE_HOURS = 6      # 同一版本内的静默检查间隔（小时）
+
+# 上游 mod 的发布源（同时在界面上提示上游是否有新版本）
+UPSTREAM_REPO = "sdli1995/dlssg_for_sm86"
+UPSTREAM_API = f"https://api.github.com/repos/{UPSTREAM_REPO}/releases/latest"
+UPSTREAM_PAGE = f"https://github.com/{UPSTREAM_REPO}/releases"
+
+
+@dataclass
+class UpdateInfo:
+    """一次更新检查的结果。"""
+
+    ok: bool = False                 # 是否成功完成检查（网络/解析都正常）
+    version: str = ""                # 远端最新版本号（已去掉前导 v）
+    is_newer: bool = False           # 远端版本是否高于本机
+    url: str = UPDATE_PAGE           # 下载页
+    notes: str = ""                  # Release 说明（可能为空）
+    published: str = ""              # 发布时间（ISO 字符串，可能为空）
+    upstream_version: str = ""       # 上游 mod 的最新版本（可选）
+    upstream_newer: bool = False     # 上游是否高于本机内嵌的 0.3.2
+    error: str = ""                  # 失败原因（ok=False 时有值）
+
+
+def parse_version(s: str) -> tuple[int, ...]:
+    """把 "v1.7.1" / "1.7.1" / "0.3.2" 解析成可比较的数字元组。
+
+    非数字段一律当 0，保证任何输入都能比较而不抛异常。
+    """
+    s = str(s or "").strip().lstrip("vV")
+    parts: list[int] = []
+    for seg in re.split(r"[.\-+]", s):
+        m = re.match(r"^\d+", seg)
+        parts.append(int(m.group()) if m else 0)
+    return tuple(parts) if parts else (0,)
+
+
+def version_gt(a: str, b: str) -> bool:
+    """a 是否比 b 新。按位比较，短的一方缺位补 0（1.7 == 1.7.0）。"""
+    ta, tb = parse_version(a), parse_version(b)
+    n = max(len(ta), len(tb))
+    ta = ta + (0,) * (n - len(ta))
+    tb = tb + (0,) * (n - len(tb))
+    return ta > tb
+
+
+def _http_json(url: str, timeout: int = UPDATE_TIMEOUT) -> dict:
+    """取一个 JSON 端点。失败时抛异常，由调用方转成用户可读的错误。"""
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": f"{APP_NAME}/{APP_VERSION}",   # GitHub API 要求带 UA
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+
+def _short_error(e: Exception) -> str:
+    """把网络异常压成一句人能看懂的短句。"""
+    if isinstance(e, urllib.error.HTTPError):
+        if e.code == 404:
+            return tr('发布页暂不可用（404）')
+        if e.code == 403:
+            return tr('请求过于频繁（403），请稍后再试')
+        return tr('服务器返回 {0}').format(e.code)
+    if isinstance(e, urllib.error.URLError):
+        reason = str(getattr(e, "reason", "") or "")
+        if "timed out" in reason.lower() or "timeout" in reason.lower():
+            return tr('连接超时')
+        return tr('无法连接到网络')
+    if isinstance(e, TimeoutError):
+        return tr('连接超时')
+    if isinstance(e, (json.JSONDecodeError, ValueError)):
+        return tr('返回内容无法解析')
+    return tr('检查失败：{0}').format(type(e).__name__)
+
+
+def check_update(include_upstream: bool = True) -> UpdateInfo:
+    """检查本工具（以及上游 mod）是否有新版本。
+
+    只做只读 GET，不上传任何数据。任何失败都返回 ok=False + error，
+    绝不抛异常 —— 调用方（后台线程）据此决定是否提示用户。
+    """
+    info = UpdateInfo()
+    try:
+        data = _http_json(UPDATE_API)
+    except Exception as e:                      # noqa: BLE001 - 网络层什么都可能抛
+        info.error = _short_error(e)
+        return info
+
+    tag = str(data.get("tag_name") or data.get("name") or "").strip()
+    if not tag:
+        info.error = tr('发布页没有版本信息')
+        return info
+
+    info.ok = True
+    info.version = tag.lstrip("vV")
+    info.is_newer = version_gt(info.version, APP_VERSION)
+    info.url = str(data.get("html_url") or UPDATE_PAGE)
+    info.notes = str(data.get("body") or "")
+    info.published = str(data.get("published_at") or "")
+
+    if include_upstream:
+        try:
+            up = _http_json(UPSTREAM_API)
+            utag = str(up.get("tag_name") or "").strip()
+            if utag:
+                info.upstream_version = utag.lstrip("vV")
+                # 与内嵌 mod 版本比较（MOD_NAME 形如 "DLSSG SM86 0.3.2"）
+                mod_ver = MOD_NAME.rsplit(" ", 1)[-1]
+                info.upstream_newer = version_gt(info.upstream_version, mod_ver)
+        except Exception:                       # noqa: BLE001 - 上游查不到不影响主流程
+            pass
+    return info
+
+
+def update_cache_file() -> Path:
+    return data_dir() / "update_check.json"
+
+
+def load_update_cache() -> dict:
+    f = update_cache_file()
+    if f.is_file():
+        try:
+            return json.loads(read_text(f))
+        except Exception:
+            pass
+    return {}
+
+
+def save_update_cache(d: dict) -> None:
+    try:
+        f = update_cache_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(f)
+    except Exception:
+        pass                                     # 缓存写失败不影响功能
+
+
+def should_auto_check(state: dict) -> bool:
+    """是否该做一次静默检查：距上次超过缓存间隔，或上次检查的是别的版本。"""
+    if not state.get("settings", {}).get("auto_update_check", True):
+        return False
+    c = load_update_cache()
+    if c.get("app_version") != APP_VERSION:
+        return True
+    try:
+        last = float(c.get("checked_at") or 0)
+    except (TypeError, ValueError):
+        return True
+    return (time.time() - last) > UPDATE_CACHE_HOURS * 3600
+
+
+def remember_update_check(info: UpdateInfo) -> None:
+    save_update_cache({
+        "app_version": APP_VERSION,
+        "checked_at": time.time(),
+        "remote_version": info.version,
+        "is_newer": info.is_newer,
+        "upstream_version": info.upstream_version,
+        "upstream_newer": info.upstream_newer,
+        "ok": info.ok,
+    })
+
+
+def open_url(url: str) -> tuple[bool, str]:
+    """用系统默认浏览器打开链接。"""
+    try:
+        if sys.platform == "win32":
+            os.startfile(url)                    # type: ignore[attr-defined]
+        else:
+            import webbrowser
+            webbrowser.open(url)
+        return True, ""
+    except Exception as e:                       # noqa: BLE001
+        return False, tr('无法打开链接：{0}').format(e)
+
+
 # ---------------------------------------------------------------- 数据结构
 
 @dataclass
@@ -1456,10 +1644,14 @@ def load_state() -> dict:
     f = state_file()
     if f.is_file():
         try:
-            return json.loads(read_text(f))
+            st = json.loads(read_text(f))
+            st.setdefault("settings", {}).setdefault("auto_update_check", True)
+            return st
         except Exception:
             pass
-    return {"games": {}, "roots": [], "settings": {"mult": 4, "bilinear": False, "level": 1}}
+    return {"games": {}, "roots": [],
+            "settings": {"mult": 4, "bilinear": False, "level": 1,
+                         "auto_update_check": True}}
 
 
 def save_state(state: dict) -> None:
@@ -2002,8 +2194,14 @@ def _cli(argv: list[str]) -> int:
             log(l)
         return 0 if ok else 1
 
+    if "--update" in argv:
+        info = check_update(include_upstream="--no-upstream" not in argv)
+        print(json.dumps(asdict(info), ensure_ascii=False, indent=2))
+        return 0 if info.ok else 1
+
     print(f"{APP_NAME} {APP_VERSION}")
     print("  --gpu                 显示显卡探测结果")
+    print("  --update              检查是否有新版本（--no-upstream 跳过上游检查）")
     print("  --hags [--on|--off]   查看 / 开启 / 关闭硬件加速 GPU 计划")
     print("  --scan [--deep <盘符>] 扫描游戏并输出 JSON")
     print("  --install <EXE目录> [--router SM86|SM75] [--mult 2|3|4] [--bilinear]"
