@@ -205,7 +205,7 @@ EN = {
     "六种入口名均已被其他程序占用，可在“高级”里手动指定": "All six proxy names are taken by other programs; pick one manually in \"Advanced\"",
     "SM75 · RTX 20 系（0.3.0 不支持）": "SM75 - RTX 20 series (not supported in 0.3.0)",
     "[错误] 上游 0.3.0 起出厂配置仅覆盖 RTX 30 系（SM86）；RTX 20 系的实验性 SM75 路由请使用旧版工具 v1.2.0（payload 0.2.4）。": "[Error] Since upstream 0.3.0 the bundled config only covers RTX 30 series (SM86). For the experimental SM75 route on RTX 20 series, use legacy tool v1.2.0 (payload 0.2.4).",
-    "SM86 内核 · 0.3.1": "SM86 kernels - 0.3.0",
+    "SM86 / SM75 内核 · 0.3.2": "SM86 / SM75 kernels - 0.3.2",
     "运行库": "Runtime",
     "渲染路径，高风险": "Render path (risky)",
     "自动选择（推荐）": "Auto (recommended)",
@@ -273,6 +273,17 @@ EN = {
     "第三选择": "Third choice",
     "老输入栈游戏": "Older input stacks",
     "渲染路径（高风险）": "Render path (risky)",
+    "一致性档位": "Consistency tier",
+    "SM86 / SM75 内核 · 0.3.2": "SM86 / SM75 kernels - 0.3.2",
+    "0 原厂（最保守）": "0 Stock (most conservative)",
+    "1 逐位一致（推荐）": "1 Bit-identical (recommended)",
+    "2 更快（有损，PSNR 50dB+）": "2 Faster (lossy, PSNR 50dB+)",
+    "3 最快（有损）": "3 Fastest (lossy)",
+    "（不再是逐位一致，画质有损）": " (no longer bit-identical - image quality is lossy)",
+    "；310.1 无有损内核，仅支持档位 0–1": "; the 310.1 runtime has no lossy kernels - only tiers 0-1 are available",
+    "[提示] 310.1 运行库没有有损图像内核，档位 2/3 等同于档位 1，已按档位 1 写入。": "[Info] The 310.1 runtime has no lossy image kernels; tiers 2/3 behave as tier 1, so tier 1 was written.",
+    "[提示] 档位值非法，已按上游行为回退到档位 1。": "[Info] Invalid tier value - falling back to tier 1, as upstream does.",
+    "[完成] 已启用（{0}，档位 {1}）。重启游戏后进入画面设置，打开“帧生成”并选择倍率；游戏支持动态插帧时最高可选 {2}X。": "[Done] Enabled ({0}, tier {1}). Restart the game, open graphics settings and pick a multiplier; up to {2}X where the game supports dynamic frame generation.",
 }
 
 ZH_TW = {
@@ -538,7 +549,17 @@ ZH_TW = {
     "第三选择": "第三選擇",
     "老输入栈游戏": "舊輸入堆疊遊戲",
     "渲染路径（高风险）": "渲染路徑（高風險）",
-    "SM86 内核 · 0.3.1": "SM86 核心 · 0.3.1",
+    "一致性档位": "一致性檔位",
+    "SM86 / SM75 内核 · 0.3.2": "SM86 / SM75 核心 · 0.3.2",
+    "0 原厂（最保守）": "0 原廠（最保守）",
+    "1 逐位一致（推荐）": "1 逐位一致（建議）",
+    "2 更快（有损，PSNR 50dB+）": "2 更快（有損，PSNR 50dB+）",
+    "3 最快（有损）": "3 最快（有損）",
+    "（不再是逐位一致，画质有损）": "（不再逐位一致，畫質有損）",
+    "；310.1 无有损内核，仅支持档位 0–1": "；310.1 無有損核心，僅支援檔位 0–1",
+    "[提示] 310.1 运行库没有有损图像内核，档位 2/3 等同于档位 1，已按档位 1 写入。": "[提示] 310.1 執行庫沒有有損圖像核心，檔位 2/3 等同於檔位 1，已按檔位 1 寫入。",
+    "[提示] 档位值非法，已按上游行为回退到档位 1。": "[提示] 檔位值非法，已按上游行為退回檔位 1。",
+    "[完成] 已启用（{0}，档位 {1}）。重启游戏后进入画面设置，打开“帧生成”并选择倍率；游戏支持动态插帧时最高可选 {2}X。": "[完成] 已啟用（{0}，檔位 {1}）。重新啟動遊戲後進入顯示設定，開啟「影格生成」並選擇倍率；遊戲支援動態插幀時最高可選 {2}X。",
 }
 
 
@@ -571,7 +592,10 @@ def build(catalog: dict, code: str, name: str) -> dict:
              "310.9 运行库（最新，支持 6X）",
              "310.1 运行库（老版本，上限 4X）",
              "默认入口（首选）", "第二选择", "第三选择", "老输入栈游戏",
-             "渲染路径（高风险）", "备用入口", "默认入口"]
+             "渲染路径（高风险）", "备用入口", "默认入口",
+             # core.tier_label() 的返回值经 tr(变量) 传入，同样 AST 看不到
+             "0 原厂（最保守）", "1 逐位一致（推荐）",
+             "2 更快（有损，PSNR 50dB+）", "3 最快（有损）"]
     for k in extra:
         if k not in keys:
             keys.append(k)

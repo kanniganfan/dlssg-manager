@@ -27,9 +27,9 @@ import i18n
 from i18n import tr  # 多语言：中文字面量为源键，详见 i18n.py
 
 APP_NAME = "DLSSG Manager"
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.7.0"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
-MOD_NAME = "DLSSG SM86 0.3.1"
+MOD_NAME = "DLSSG SM86 0.3.2"
 
 INI_NAME = "dlssg_sm86.ini"
 LOG_DIR_NAME = "dlssg_sm86"
@@ -68,11 +68,8 @@ PAYLOAD_SHA256_LEGACY = {
     "altnative/dxgi.dll": "8d29eddbd7f1c3e272d07f94ab8812a80ef5b7aeb73923320bf9a432ddcf74c0",
 }
 
-# 上游 0.3.1（commit f275d45）重建的全部 12 个代理 DLL。
-# 本版相对 0.3.0：恢复 RTX 20（SM75）支持、INI 逐键回退、出厂 4X、fg_gate 诊断；
-# 所有 DLL 重编译重签名，体积约 26.7~28.3 MB（0.3.0 为 17.5~19.0 MB）。
-# 旧版哈希保留在 PAYLOAD_SHA256_LEGACY 之外的 _PREV 表中，用于识别 0.3.0 部署。
-PAYLOAD_SHA256_PREV = {
+# 上游 0.3.0（commit 7880d3d）的 12 个代理 DLL —— 仅用于识别最老的部署。
+PAYLOAD_SHA256_030 = {
     # --- 0.3.0 310.9（根目录）---
     "version.dll": "a22d2453f25d7df3fdc0d6d683c21f01769a115439d58f1341183a75faaf8c7d",
     "alternatives/winmm.dll": "197f97e90541ae688d291ef388b1eddc0c55cb657603eb55dea2d3d178b1e384",
@@ -89,21 +86,42 @@ PAYLOAD_SHA256_PREV = {
     "310.1/alternatives/d3d12.dll": "337ed97b9303192915e6edcac0310dca8817f72baa414dffa83d238cdb2ca724",
 }
 
-PAYLOAD_SHA256 = {
-    # --- 310.9（根目录，上游 0.3.1）---
+# 上游 0.3.1（commit f275d45）重建的全部 12 个代理 DLL。
+# 相对 0.3.0：恢复 RTX 20（SM75）支持、INI 逐键回退、出厂 4X、fg_gate 诊断；
+# 所有 DLL 重编译重签名，体积约 26.7~28.3 MB（0.3.0 为 17.5~19.0 MB）。
+# 保留本表用于识别 v1.6.0 部署（升级时可直接覆盖，不误判为第三方文件）。
+PAYLOAD_SHA256_PREV = {
+    # --- 0.3.1 310.9（根目录）---
     "version.dll": "3d4c7d537a6e71e3a9d41ffc6487e054b26c56d27b7c0825d39eaa7ef0c7e86d",
     "alternatives/winmm.dll": "40eaa7dff6eb6281917eb84aa1c6e580c9e69f8736b647d28decb561f6efd7eb",
     "alternatives/dbghelp.dll": "13071d2a8cccd5a4707eedd5ccf00aee6df8b6aceba03e7c1dda9358f0f2c998",
     "alternatives/dinput8.dll": "9f77a9070a7a3277f3d7e405e49e61de7e53101e2925f75bacd9cc204e14a0da",
     "alternatives/dxgi.dll": "539138464137855f5962811588000a95897b3ddb14f5b44a197e37c3e17bd9fb",
     "alternatives/d3d12.dll": "30b48198f0cd100827037bdbe27b2a15bc050ff1c276c520ffc41705920f07b1",
-    # --- 310.1（310.1/ 子目录，上游 0.3.1）---
+    # --- 0.3.1 310.1（310.1/ 子目录）---
     "310.1/version.dll": "ca4146f76d4b176d17246d8c0e66042c57f7b25dcabea3200b33821522597211",
     "310.1/alternatives/winmm.dll": "2312e761ee589204ddf4d402c1ae36367aa73d9bcd9fdfd9bbe56c06604a63e6",
     "310.1/alternatives/dbghelp.dll": "c4679d28f69e5c99aec290725ef930a2fc58c657514f65f650efdbb0a308143c",
     "310.1/alternatives/dinput8.dll": "94767cc139f8ecb6373765cd102cc85a28601cd55101f53ae854e61a4cbf4868",
     "310.1/alternatives/dxgi.dll": "7dec971ff126f427b855d1238ff2b2ecb6ab7616c467776f882e7a4e244cc5b5",
     "310.1/alternatives/d3d12.dll": "77860075059a630a90327e417cae7db6067ff56878ddb429d5d741c813dd4995",
+}
+
+PAYLOAD_SHA256 = {
+    # --- 310.9（根目录，上游 0.3.2）---
+    "version.dll": "39b16f2cdb16450f0edc0e0b14231951e10954131ad9aa12037700e18dc91040",
+    "alternatives/winmm.dll": "f36ced34bbcd28c09f70c0d6adad2e1f9b1659cda46a204cc01a38d1ae86da37",
+    "alternatives/dbghelp.dll": "67e04932c9e1d980d6431ec626f4db21b78a1375e95de6e7e9366f58f0cb9a65",
+    "alternatives/dinput8.dll": "6fe34c8c291fb5be21184076b14b52b6e01de88a263ae0d10f6daa68e0bb5d4e",
+    "alternatives/dxgi.dll": "988f1da4397779fd901924d793dba967d0ffa44bfaa8f9ab25b5c5641ab93ffc",
+    "alternatives/d3d12.dll": "5b36c5d068b64f7413d75d30fcfa35539da26bd75452bab2a1340baf26da0fe8",
+    # --- 310.1（310.1/ 子目录，上游 0.3.2）---
+    "310.1/version.dll": "a1f5e4c8c43238de5b639ef858fb67fbb1874e5e8681833bc3ffff4d3b573c50",
+    "310.1/alternatives/winmm.dll": "f20bff1fa5f9a9dc6b7a35ce16fc8c743a7a34a1a47c116283b682f2260b6107",
+    "310.1/alternatives/dbghelp.dll": "d17643ae2aed871a646f92ff6613e0604dedab2dc4ec8c8f7f2294f1ec9f7013",
+    "310.1/alternatives/dinput8.dll": "1893acb44f84185a21a5a92b6349a2227e39cefb6a901bae1025174b5c60261a",
+    "310.1/alternatives/dxgi.dll": "ecc28978ff578489ea88fbd9f1c18b566f8b5d5574003e947dfbfa66e177544c",
+    "310.1/alternatives/d3d12.dll": "05a83f28c942148e75d11897cc9ea9f1f3a90613a3e0aac2eea0118a016fcc54",
 }
 
 
@@ -118,6 +136,63 @@ def runtime_prefix(rt: str) -> str:
 def runtime_mult_cap(rt: str) -> int:
     """运行库支持的帧倍率上限：310.9 = 6，310.1 = 4。"""
     return 4 if rt == "310.1" else 6
+
+
+# ---------------------------------------------------------------- 一致性档位
+# 上游 0.3.2 把 [FrameGeneration] Optimized 由 0/1 两态改为 0–3 四级：
+# 判据只有一条 —— 允许生成的画面偏离官方 NVIDIA 运行库多远。
+#   0 = 原厂内核，不做任何加速（最保守）
+#   1 = 全部「逐位一致」的加速（出厂默认；画面与官方完全相同）
+#   2 = 档位 1 + 有损图像内核（对官方输出 PSNR 仍在 ~50 dB 以上）
+#   3 = 全部有损加速（画质代价最大，最快）
+# 档位累加且单调；档位值非法时上游回退到档位 1（写这个键的人本意是要加速）。
+TIER_MIN, TIER_MAX = 0, 3
+DEFAULT_TIER = 1
+
+# 上游 0.3.2 的出厂 Optimized 值（用于「恢复出厂设置」与默认值说明）
+FACTORY_OPTIMIZED = 1
+
+
+def tier_cap(runtime: str) -> int:
+    """该运行库实际能生效的最高档位。
+
+    310.1 构建里没有新增的有损图像内核：文档明确写了「310.1 构建上
+    2/3 等同于 1」，所以本工具在 310.1 上直接钳到 1，避免给用户
+    一个看起来生效其实没有的档位。
+    """
+    return 1 if runtime == "310.1" else TIER_MAX
+
+
+def tier_label(tier: int) -> str:
+    """档位的用户可读名（同时用作 i18n 键）。"""
+    return {
+        0: '0 原厂（最保守）',
+        1: '1 逐位一致（推荐）',
+        2: '2 更快（有损，PSNR 50dB+）',
+        3: '3 最快（有损）',
+    }.get(int(tier), '1 逐位一致（推荐）')
+
+
+def clamp_tier(tier: int, runtime: str) -> tuple[int, str]:
+    """把档位钳到该运行库支持的范围内。
+
+    返回 (档位, 原因)。原因为空串表示未被钳制；否则是以下之一：
+      "invalid"      —— 值非法/越界，按上游行为回退到档位 1；
+      "runtime_cap"  —— 值合法但该运行库（310.1）不支持，钳到其能力上限。
+    两种原因的处置相同、但给用户的提示不同，所以必须区分开。
+    """
+    try:
+        t = int(tier)
+    except (TypeError, ValueError):
+        return DEFAULT_TIER, "invalid"
+    if t < TIER_MIN or t > TIER_MAX:
+        # 上游行为：值非法时回退到档位 1，而非 0
+        # （写这个键的人本意是要打开加速，不该被静默退回原厂）
+        return DEFAULT_TIER, "invalid"
+    cap = tier_cap(runtime)
+    if t > cap:
+        return cap, "runtime_cap"
+    return t, ""
 
 
 def runtime_label(rt: str) -> str:
@@ -1416,31 +1491,50 @@ def entry_of_deployment(exe_dir: str) -> tuple[str, bool]:
 
 # ---------------------------------------------------------------- 部署 / 恢复
 
-def build_ini(router: str, mult: int, bilinear: bool, level: int) -> str:
-    """生成 dlssg_sm86.ini（上游 0.3.0 代理模式格式）。
+def build_ini(router: str, mult: int, bilinear: bool, level: int,
+              tier: int = DEFAULT_TIER, runtime: str = "") -> str:
+    """生成 dlssg_sm86.ini（上游 0.3.2 代理模式格式）。
 
-    router / bilinear 参数保留以兼容调用方，但 0.3.0 的 ini 不再包含
+    router / bilinear 参数保留以兼容调用方，但代理模式的 ini 不含
     Router / KernelImage / HardwareBilinear（native 模式的键，已废弃）；
-    运行库与 SM86 后端内嵌在代理 DLL 中，见上游 0.3.0 README。
+    运行库与 SM86/SM75 后端内嵌在代理 DLL 中。
+
+    tier: 一致性档位 0–3（上游 0.3.2 的 [FrameGeneration] Optimized）。
+          值越界时按上游行为回退到档位 1。
     mult: 期望倍率 2~6，ini 值 = mult-1（5 = 6X 上限，由运行库钳制）。
     """
     mult = max(2, min(6, int(mult or 2)))
+    t, clamp_reason = clamp_tier(tier, runtime or DEFAULT_RUNTIME)
+    tier_note = ""
+    if clamp_reason == "runtime_cap":
+        tier_note = ("; 注意：310.1 运行库没有有损图像内核，2/3 档等同于 1 档，"
+                     "已按 1 档写入。\r\n")
+    elif clamp_reason == "invalid":
+        tier_note = "; 注意：档位值非法，已按上游行为回退到 1 档。\r\n"
     return (
-        f"; DLSSG SM86 0.3.1 - 由 {APP_NAME} {APP_VERSION} 生成\r\n"
+        f"; DLSSG SM86 0.3.2 - 由 {APP_NAME} {APP_VERSION} 生成\r\n"
         "; 修改后需要重启游戏才会生效。\r\n"
+        "; 本文件保留上游 0.3.2 的两个决定性开关（Optimized / MaxGeneratedFrames），\r\n"
+        "; 其余诊断与兼容项取安全默认、不在此文件中，完整清单见上游 docs/INSTALL.md。\r\n"
         "[General]\r\n"
         "; 1 = 启用帧生成（内嵌 Ampere 优化版 DLSS-G 运行库）；0 = 关闭（游戏自带 DLSS-G 原样加载）。\r\n"
         "Enabled=1\r\n"
         "\r\n[FrameGeneration]\r\n"
-        "; 1 = 最优内核（推荐，输出与原厂逐位一致，离线基准快 19~32%）；0 = 原厂内核。\r\n"
-        "Optimized=1\r\n"
-        "; 生成帧上限：5 = 最高 6X，3 = 最高 4X。实际倍率由游戏请求并钳到运行库支持范围。\r\n"
+        "; 一致性档位：允许生成的画面偏离官方运行库多远。数字越大越快、离官方画面越远。\r\n"
+        ";   0 = 原厂内核，不做任何加速（最保守）\r\n"
+        ";   1 = 全部逐位一致的加速（推荐，默认；画面与官方完全相同）\r\n"
+        ";   2 = 档位 1 + 有损图像内核（对官方输出 PSNR 仍在 ~50 dB 以上），仅 310.9 构建\r\n"
+        ";   3 = 全部有损加速（画质代价最大，最快）\r\n"
+        "; 档位 2/3 不再逐位一致；310.1 构建上 2/3 等同于 1。\r\n"
+        + tier_note +
+        f"Optimized={t}\r\n"
+        "; 生成帧上限：5 = 最高 6X（仅 310.9），3 = 最高 4X。实际倍率由游戏请求并钳到运行库支持范围。\r\n"
         f"MaxGeneratedFrames={mult - 1}\r\n"
         "\r\n[Compatibility]\r\n"
-        "; DLSS-G 渲染预设（UI 重组），Auto = 由游戏/驱动配置决定（默认）；A = 强制关；B = 强制开。\r\n"
+        "; DLSS-G 渲染预设（UI 重组，仅 310.9），Auto = 由游戏/驱动配置决定（默认）；A = 强制关；B = 强制开。\r\n"
         "Preset=Auto\r\n"
         "\r\n[Logging]\r\n"
-        "; 0=关闭, 1=仅错误, 2=配置与能力, 3=内核与求值轨迹。写入下方 Directory。\r\n"
+        "; 0=关闭, 1=仅错误, 2=配置与能力（含 fg_gate_* 帧生成闸门诊断）, 3=内核与求值轨迹。写入下方 Directory。\r\n"
         f"Level={level}\r\n"
         "Directory=dlssg_sm86\\logs\r\n"
         "\r\n[Runtime]\r\n"
@@ -1510,12 +1604,14 @@ def verify_payload(runtime: str = "") -> list[str]:
 def _all_known_hashes() -> set[str]:
     """当前 payload 与历史版本的入口哈希合集（识别本项目部署）。
 
-    含三部分：当前 0.3.1、上一版 0.3.0（PAYLOAD_SHA256_PREV）、
-    更早的 native 模式（PAYLOAD_SHA256_LEGACY）。升级部署时据此判定
-    「这是本项目写入的文件」，可直接覆盖而不误判为第三方文件。
+    含四部分：当前 0.3.2、上一版 0.3.1（PAYLOAD_SHA256_PREV）、
+    再上一版 0.3.0（PAYLOAD_SHA256_030）、更早的 native 模式
+    （PAYLOAD_SHA256_LEGACY）。升级部署时据此判定「这是本项目写入的
+    文件」，可直接覆盖而不误判为第三方文件。
     """
     return (set(PAYLOAD_SHA256.values())
             | set(PAYLOAD_SHA256_PREV.values())
+            | set(PAYLOAD_SHA256_030.values())
             | set(PAYLOAD_SHA256_LEGACY.values()))
 
 
@@ -1562,12 +1658,13 @@ def _is_running(exe_path: str) -> bool:
 
 def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
            prefer_entry: str = "", force: bool = False,
-           runtime: str = "") -> tuple[bool, list[str]]:
+           runtime: str = "", tier: int = DEFAULT_TIER) -> tuple[bool, list[str]]:
     """部署到游戏目录。
 
     runtime: 内嵌运行库版本（310.9 / 310.1），照搬上游两个发布包的结构；
              310.9 上限 6X，310.1 上限 4X。
-    router/bilinear: 仅保留以兼容旧调用方，0.3.0 代理模式已无对应 ini 键。
+    tier:    一致性档位 0–3（上游 0.3.2 的 Optimized）。310.1 上会被钳到 1。
+    router/bilinear: 仅保留以兼容旧调用方，代理模式已无对应 ini 键。
     """
     logs: list[str] = []
     runtime = runtime or DEFAULT_RUNTIME
@@ -1578,6 +1675,13 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
         logs.append(tr('[提示] {0} 上限为 {1}X，已钳制。').format(
             runtime_label(runtime), cap))
         mult = cap
+
+    tier, tier_clamp = clamp_tier(tier, runtime)
+    if tier_clamp == "runtime_cap":
+        logs.append(tr('[提示] 310.1 运行库没有有损图像内核，'
+                       '档位 2/3 等同于档位 1，已按档位 1 写入。'))
+    elif tier_clamp == "invalid":
+        logs.append(tr('[提示] 档位值非法，已按上游行为回退到档位 1。'))
     exe_dir = Path(game.exe_dir)
     if not exe_dir.is_dir():
         return False, [tr('[错误] 目录不存在：{0}').format(exe_dir)]
@@ -1646,9 +1750,11 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
         logs.append(tr('[写入] {0} → {1}（{2}）').format(entry, target, size_text(target.stat().st_size)))
         logs.append(tr('[校验] SHA256 {0}… 与运行包一致：{1}').format(new_hash[:20], new_hash == sha256(src)))
 
-        ini_path.write_text(build_ini(router, mult, bilinear, level), encoding="utf-8")
-        logs.append(f"[配置] {INI_NAME}：Optimized=1，MaxGeneratedFrames="
-                    f"{max(1, min(5, int(mult) - 1))}（最高 {min(int(mult), cap)}X），"
+        ini_path.write_text(build_ini(router, mult, bilinear, level, tier, runtime),
+                            encoding="utf-8")
+        logs.append(f"[配置] {INI_NAME}：Optimized={tier}（{tr(tier_label(tier))}），"
+                    f"MaxGeneratedFrames={max(1, min(5, int(mult) - 1))}"
+                    f"（最高 {min(int(mult), cap)}X），"
                     f"Preset=Auto，运行库 {runtime}")
     except PermissionError as e:
         return False, logs + [tr('[错误] 权限不足或被占用：{0}').format(e),
@@ -1659,13 +1765,14 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
     rec.update({
         "name": game.name, "exe_dir": str(exe_dir), "exe": game.exe, "entry": entry,
         "dll_sha256": sha256(target), "installed_at": time.time(),
-        "runtime": runtime, "mult": mult, "level": level,
+        "runtime": runtime, "mult": mult, "level": level, "tier": tier,
         "source": game.source, "engine": game.engine, "dlssg": game.dlssg,
     })
     st["games"][key] = rec
     save_state(st)
-    logs.append(tr('[完成] 已启用（{0}）。重启游戏后进入画面设置，打开“帧生成”并选择倍率；'
-                   '游戏支持动态插帧时最高可选 {1}X。').format(runtime_label(runtime), cap))
+    logs.append(tr('[完成] 已启用（{0}，档位 {1}）。重启游戏后进入画面设置，打开“帧生成”并选择倍率；'
+                   '游戏支持动态插帧时最高可选 {2}X。').format(
+                       runtime_label(runtime), tier, cap))
     return True, logs
 
 
@@ -1740,10 +1847,20 @@ def read_deployed_config(exe_dir: str) -> dict:
     txt = read_text(f)
     cfg = {}
     for k in ("Router", "KernelImage", "HardwareBilinear", "MaxGeneratedFrames", "Level",
-              "Enabled", "Optimized", "Preset"):
+              "Enabled", "Optimized", "OptimizedKernels", "Preset",
+              "ImageApprox", "SkipRepeatedRealCopy"):
         m = re.search(rf"^{k}\s*=\s*(\S+)", txt, re.M)
         if m:
             cfg[k] = m.group(1)
+    # 档位规范化：0.3.1 及更早只写 0/1，0.3.2 起写 0–3；
+    # OptimizedKernels 是官方保留的向后兼容别名（两者都在时 Optimized 优先）。
+    raw = cfg.get("Optimized") or cfg.get("OptimizedKernels")
+    if raw is not None:
+        try:
+            t = int(raw)
+            cfg["tier"] = t if TIER_MIN <= t <= TIER_MAX else DEFAULT_TIER
+        except ValueError:
+            cfg["tier"] = DEFAULT_TIER
     return cfg
 
 
@@ -1869,8 +1986,11 @@ def _cli(argv: list[str]) -> int:
         router = argv[argv.index("--router") + 1] if "--router" in argv else gpu.route
         mult = int(argv[argv.index("--mult") + 1]) if "--mult" in argv else 4
         entry = argv[argv.index("--entry") + 1] if "--entry" in argv else ""
+        runtime = argv[argv.index("--runtime") + 1] if "--runtime" in argv else ""
+        tier = int(argv[argv.index("--tier") + 1]) if "--tier" in argv else DEFAULT_TIER
         g = Game(name=Path(target).name, exe_dir=canon_dir(target))
-        ok, logs = deploy(g, router, mult, "--bilinear" in argv, 1, entry, bool(entry))
+        ok, logs = deploy(g, router, mult, "--bilinear" in argv, 1, entry, bool(entry),
+                          runtime, tier)
         for l in logs:
             log(l)
         return 0 if ok else 1
@@ -1886,7 +2006,8 @@ def _cli(argv: list[str]) -> int:
     print("  --gpu                 显示显卡探测结果")
     print("  --hags [--on|--off]   查看 / 开启 / 关闭硬件加速 GPU 计划")
     print("  --scan [--deep <盘符>] 扫描游戏并输出 JSON")
-    print("  --install <EXE目录> [--router SM86|SM75] [--mult 2|3|4] [--bilinear] [--entry <入口>]")
+    print("  --install <EXE目录> [--router SM86|SM75] [--mult 2|3|4] [--bilinear]"
+          " [--entry <入口>] [--runtime 310.9|310.1] [--tier 0|1|2|3]")
     print("  --restore <EXE目录>")
     return 0
 

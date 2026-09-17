@@ -1381,7 +1381,7 @@ class MainWindow(QWidget):
 
         self.gpu_pill = Pill(tr('路由 {0}').format(self.gpu.route), "info" if self.gpu.supported else "warn")
         lay.addWidget(self.gpu_pill)
-        lay.addWidget(Pill(tr('SM86 内核 · 0.3.1'), "purple"))
+        lay.addWidget(Pill(tr('SM86 / SM75 内核 · 0.3.2'), "purple"))
         return w
 
     # ------------------------------------------------- 左侧列表
@@ -1874,6 +1874,26 @@ class MainWindow(QWidget):
         self.sw_log = Switch(False)
         r2.add(self.sw_log)
         cl.addWidget(r2)
+
+        # 配置行 3：一致性档位（上游 0.3.2 的 [FrameGeneration] Optimized 0–3）。
+        # 判据只有一条：允许生成的画面偏离官方运行库多远。档位越高越快。
+        r3 = FlowRow(h_spacing=10, v_spacing=6)
+        d = QLabel(tr('一致性档位'))
+        d.setObjectName("kv")
+        d.setMinimumWidth(max(66, d.sizeHint().width()))
+        r3.add(d)
+        # 说明标签必须先建：_refresh_tier_seg() 会通过 _update_tier_hint() 写它，
+        # 若顺序颠倒，首次构建时标签还不存在，说明文字会一直是空的。
+        self.lb_tier = QLabel("")
+        self.lb_tier.setObjectName("kvval")
+        self.lb_tier.setWordWrap(True)
+        self.seg_tier = Segmented([f"{i}" for i in range(core.TIER_MIN, core.TIER_MAX + 1)],
+                                  core.DEFAULT_TIER)
+        self.seg_tier.changed.connect(lambda _i: self._on_tier_changed())
+        self._refresh_tier_seg()          # 应用运行库上限 + 写档位说明
+        r3.add(self.seg_tier)
+        r3.add(self.lb_tier)
+        cl.addWidget(r3)
         lay.addWidget(cfg)
 
         # 操作按钮：窄宽时自动换行；主按钮给足最小宽度保证可点。
@@ -2066,9 +2086,15 @@ class MainWindow(QWidget):
                 self.kv_state.set(tr('已部署 {0}（Router={1}）').format(g.entry, cfg.get('Router', '?')))
             else:
                 self.kv_state.set(tr('已部署 {0}').format(g.entry))
-            # 0.3.0 ini 无 Router/双线性键；MaxGeneratedFrames 新旧格式同名，兼容读取
+            # MaxGeneratedFrames 新旧格式同名，兼容读取
             m = int(cfg.get("MaxGeneratedFrames", "1") or 1)
             self.seg_mult.set_value({1: 0, 2: 1, 3: 2, 4: 3, 5: 4}.get(m, 0))
+            # 档位：0.3.2 起 INI 写 0–3；更早版本只有 0/1（读回即档位 0/1）。
+            t = cfg.get("tier")
+            if t is None:
+                t = core.DEFAULT_TIER
+            self.seg_tier.set_value(max(core.TIER_MIN, min(int(t), self._tier_cap()))
+                                    - core.TIER_MIN)
             if cfg.get("Level") == "2":
                 self.sw_log.setChecked(True)
         else:
@@ -2102,8 +2128,13 @@ class MainWindow(QWidget):
         self.cmb_entry.setCurrentIndex(max(0, idx))
 
     def _on_runtime_changed(self) -> None:
-        """切换运行库：重建倍率档位（310.1 上限 4X）并刷新显存估算。"""
+        """切换运行库：重建倍率档位（310.1 上限 4X）并刷新显存估算。
+
+        0.3.2 起还需刷新档位段：310.1 构建没有有损图像内核，
+        其档位上限只有 1，因此 2/3 档在该运行库下必须置灰。
+        """
         self._refresh_mult_seg()
+        self._refresh_tier_seg()
         self._update_vram()
 
     def _refresh_mult_seg(self) -> None:
@@ -2111,7 +2142,7 @@ class MainWindow(QWidget):
 
         默认选中 4X：上游 0.3.1 把出厂 MaxGeneratedFrames 由 5 改为 3（4X），
         理由是自带 Dynamic MFG 的游戏会默认跑到上限、6X 对多数人偏高
-        （上游 issue #497/#499）。本工具默认值随之对齐。
+        （上游 issue #497/#499）。上游 0.3.2 沿用该出厂值，本工具随之对齐。
         切换运行库导致上限变化时，保留用户已选倍率，越界才钳到上限。
         """
         cap = core.runtime_mult_cap(self._runtime())
@@ -2125,6 +2156,48 @@ class MainWindow(QWidget):
 
     def _mult(self) -> int:
         return {0: 2, 1: 3, 2: 4, 3: 5, 4: 6}.get(self.seg_mult.value(), 2)
+
+    # ------------------------------------------------- 一致性档位（0.3.2）
+
+    def _tier_cap(self) -> int:
+        """当前运行库实际支持的档位上限（310.1 为 1）。"""
+        return core.tier_cap(self._runtime())
+
+    def _tier(self) -> int:
+        """当前选中的一致性档位（0–3）。"""
+        return int(self.seg_tier.value()) if hasattr(self, "seg_tier") else core.DEFAULT_TIER
+
+    def _refresh_tier_seg(self) -> None:
+        """按运行库能力重建档位段，并同步下方说明文字。
+
+        档位 2/3 依赖 310.9 构建里新增的有损图像内核；310.1 上上游会
+        静默把它们当 1 处理，所以这里直接不给出这两个选项，避免用户
+        选了一个实际不生效的档位。
+        """
+        if not hasattr(self, "seg_tier"):
+            return
+        cap = self._tier_cap()
+        labels = [f"{t}" for t in range(core.TIER_MIN, cap + 1)]
+        want = self._tier() if self.seg_tier.group.buttons() else core.DEFAULT_TIER
+        want = max(core.TIER_MIN, min(want, cap))
+        self.seg_tier.set_options(labels, current=want - core.TIER_MIN)
+        self._update_tier_hint()
+
+    def _on_tier_changed(self) -> None:
+        self._update_tier_hint()
+
+    def _update_tier_hint(self) -> None:
+        """把档位含义写清楚：逐位一致 vs 有损，用户才知道自己在选什么。"""
+        if not hasattr(self, "lb_tier"):
+            return
+        t = self._tier()
+        cap = self._tier_cap()
+        text = tr(core.tier_label(t))
+        if t >= 2:
+            text += tr('（不再是逐位一致，画质有损）')
+        if cap == 1:
+            text += tr('；310.1 无有损内核，仅支持档位 0–1')
+        self.lb_tier.setText(text)
 
     def _update_vram(self) -> None:
         g = self.current
@@ -2154,7 +2227,7 @@ class MainWindow(QWidget):
         self.status.setText(tr('正在部署…'))
         self.kw = ActionWorker(core.deploy, g, "SM86", self._mult(),
                                False, 2 if self.sw_log.isChecked() else 1,
-                               self._entry(), False, self._runtime())
+                               self._entry(), False, self._runtime(), self._tier())
         self.kw.done.connect(self._on_install_done)
         self.kw.start()
 
