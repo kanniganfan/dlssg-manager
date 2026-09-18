@@ -29,9 +29,9 @@ import i18n
 from i18n import tr  # 多语言：中文字面量为源键，详见 i18n.py
 
 APP_NAME = "DLSSG Manager"
-APP_VERSION = "1.7.3"
+APP_VERSION = "1.7.4"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
-MOD_NAME = "DLSSG SM86 0.3.2"
+MOD_NAME = "DLSSG SM86 0.3.4"
 
 INI_NAME = "dlssg_sm86.ini"
 LOG_DIR_NAME = "dlssg_sm86"
@@ -92,7 +92,7 @@ PAYLOAD_SHA256_030 = {
 # 相对 0.3.0：恢复 RTX 20（SM75）支持、INI 逐键回退、出厂 4X、fg_gate 诊断；
 # 所有 DLL 重编译重签名，体积约 26.7~28.3 MB（0.3.0 为 17.5~19.0 MB）。
 # 保留本表用于识别 v1.6.0 部署（升级时可直接覆盖，不误判为第三方文件）。
-PAYLOAD_SHA256_PREV = {
+PAYLOAD_SHA256_031 = {
     # --- 0.3.1 310.9（根目录）---
     "version.dll": "3d4c7d537a6e71e3a9d41ffc6487e054b26c56d27b7c0825d39eaa7ef0c7e86d",
     "alternatives/winmm.dll": "40eaa7dff6eb6281917eb84aa1c6e580c9e69f8736b647d28decb561f6efd7eb",
@@ -109,21 +109,50 @@ PAYLOAD_SHA256_PREV = {
     "310.1/alternatives/d3d12.dll": "77860075059a630a90327e417cae7db6067ff56878ddb429d5d741c813dd4995",
 }
 
-PAYLOAD_SHA256 = {
-    # --- 310.9（根目录，上游 0.3.2）---
+# 上游 0.3.2 的 12 个代理 DLL —— 上一版（PAYLOAD_SHA256_PREV）。
+# 0.3.2 重写 310.9 的 26 个推理内核：画面与官方逐位一致且更快；
+# Optimized 由 0/1 两态改为 0–3 四级档位。v1.7.0~v1.7.3 部署的是这套。
+PAYLOAD_SHA256_PREV = {
+    # --- 0.3.2 310.9（根目录）---
     "version.dll": "39b16f2cdb16450f0edc0e0b14231951e10954131ad9aa12037700e18dc91040",
     "alternatives/winmm.dll": "f36ced34bbcd28c09f70c0d6adad2e1f9b1659cda46a204cc01a38d1ae86da37",
     "alternatives/dbghelp.dll": "67e04932c9e1d980d6431ec626f4db21b78a1375e95de6e7e9366f58f0cb9a65",
     "alternatives/dinput8.dll": "6fe34c8c291fb5be21184076b14b52b6e01de88a263ae0d10f6daa68e0bb5d4e",
     "alternatives/dxgi.dll": "988f1da4397779fd901924d793dba967d0ffa44bfaa8f9ab25b5c5641ab93ffc",
     "alternatives/d3d12.dll": "5b36c5d068b64f7413d75d30fcfa35539da26bd75452bab2a1340baf26da0fe8",
-    # --- 310.1（310.1/ 子目录，上游 0.3.2）---
+    # --- 0.3.2 310.1（310.1/ 子目录）---
     "310.1/version.dll": "a1f5e4c8c43238de5b639ef858fb67fbb1874e5e8681833bc3ffff4d3b573c50",
     "310.1/alternatives/winmm.dll": "f20bff1fa5f9a9dc6b7a35ce16fc8c743a7a34a1a47c116283b682f2260b6107",
     "310.1/alternatives/dbghelp.dll": "d17643ae2aed871a646f92ff6613e0604dedab2dc4ec8c8f7f2294f1ec9f7013",
     "310.1/alternatives/dinput8.dll": "1893acb44f84185a21a5a92b6349a2227e39cefb6a901bae1025174b5c60261a",
     "310.1/alternatives/dxgi.dll": "ecc28978ff578489ea88fbd9f1c18b566f8b5d5574003e947dfbfa66e177544c",
     "310.1/alternatives/d3d12.dll": "05a83f28c942148e75d11897cc9ea9f1f3a90613a3e0aac2eea0118a016fcc54",
+}
+
+# 当前内嵌：上游 0.3.4 的 12 个代理 DLL（2026-09-18 发布）。
+# 相对 0.3.2 的两个版本：
+#   0.3.3 架构改写提前到游戏启动并改报 RTX 50（Streamline 2.8 游戏不再卸掉
+#         帧生成插件，#509/#528）；Optimized=1 不再默认跳过重复真实帧拷贝
+#         （SkipRepeatedRealCopy，默认关，修复 0.3.2 闪烁 #532）。
+#   0.3.4 修复 0.3.3 在 RTX 30 上的驱动重置崩溃（NVIDIA App DLSS 覆盖 / NGX
+#         在线更新生效时，超分模型误收了给 Streamline 的架构改写；#535 等）。
+#         现在 NVIDIA 自己的组件一律得到真实架构，改写只对 Streamline 和游戏生效。
+# 直接跳过 0.3.3（它有已知崩溃），从 0.3.2 升到 0.3.4。
+PAYLOAD_SHA256 = {
+    # --- 310.9（根目录，上游 0.3.4）---
+    "version.dll": "575c9bb475c836cef3c40d7195656955e14220aa9f0f7dde9d817a91911cb85f",
+    "alternatives/winmm.dll": "84bfa1c4a68711439a92400cce5f80ce0ba3378caefb17b85e388a0fb60bc53c",
+    "alternatives/dbghelp.dll": "50e1c50cb45a5512bcead3ea22da560776db67f7ab8f7fe9c583b4ecee7b7a41",
+    "alternatives/dinput8.dll": "ccc0fc43f9ac1a622f37c71ea480dd75641cb6426af8023ed344a89189af5c8c",
+    "alternatives/dxgi.dll": "af12e17d4fc22d94fa84f7fe9f306c43ebfd9dcb7cbeb41d01a018138586a922",
+    "alternatives/d3d12.dll": "517f70f46d6b2354514fb5461c53c0db9b9ef0dae46d16c05b92d2fc843514db",
+    # --- 310.1（310.1/ 子目录，上游 0.3.4）---
+    "310.1/version.dll": "a4d04765f9e679aa91bfc9784253b7bd8d0ada828de7ed36e322ce714988de47",
+    "310.1/alternatives/winmm.dll": "8738dd6028db37a8269bbc7b71a1616abd352bb46c60de805b201883dad0d05e",
+    "310.1/alternatives/dbghelp.dll": "29e7ede3d1d6a27dff0795d5fb084874052f8df79534a722ad97e98da6dc36d8",
+    "310.1/alternatives/dinput8.dll": "7f18c06d48f9a0836eac23105627aaa1b799ae0bd7a45c4d84c87032e5e994eb",
+    "310.1/alternatives/dxgi.dll": "44754245d1e27675004fcd1a6b297b999377c65db0004c31bc617edb7a7aa5dd",
+    "310.1/alternatives/d3d12.dll": "081b0fe43db0e8f2caa1c3457538f972859e9e5fca61461363d4f78d28861d26",
 }
 
 
@@ -1665,13 +1694,13 @@ def entry_of_deployment(exe_dir: str) -> tuple[str, bool]:
 
 def build_ini(router: str, mult: int, bilinear: bool, level: int,
               tier: int = DEFAULT_TIER, runtime: str = "") -> str:
-    """生成 dlssg_sm86.ini（上游 0.3.2 代理模式格式）。
+    """生成 dlssg_sm86.ini（上游 0.3.4 代理模式格式）。
 
     router / bilinear 参数保留以兼容调用方，但代理模式的 ini 不含
     Router / KernelImage / HardwareBilinear（native 模式的键，已废弃）；
     运行库与 SM86/SM75 后端内嵌在代理 DLL 中。
 
-    tier: 一致性档位 0–3（上游 0.3.2 的 [FrameGeneration] Optimized）。
+    tier: 一致性档位 0–3（上游 0.3.2 起的 [FrameGeneration] Optimized）。
           值越界时按上游行为回退到档位 1。
     mult: 期望倍率 2~6，ini 值 = mult-1（5 = 6X 上限，由运行库钳制）。
     """
@@ -1684,9 +1713,9 @@ def build_ini(router: str, mult: int, bilinear: bool, level: int,
     elif clamp_reason == "invalid":
         tier_note = "; 注意：档位值非法，已按上游行为回退到 1 档。\r\n"
     return (
-        f"; DLSSG SM86 0.3.2 - 由 {APP_NAME} {APP_VERSION} 生成\r\n"
+        f"; DLSSG SM86 0.3.4 - 由 {APP_NAME} {APP_VERSION} 生成\r\n"
         "; 修改后需要重启游戏才会生效。\r\n"
-        "; 本文件保留上游 0.3.2 的两个决定性开关（Optimized / MaxGeneratedFrames），\r\n"
+        "; 本文件保留上游的两个决定性开关（Optimized / MaxGeneratedFrames），\r\n"
         "; 其余诊断与兼容项取安全默认、不在此文件中，完整清单见上游 docs/INSTALL.md。\r\n"
         "[General]\r\n"
         "; 1 = 启用帧生成（内嵌 Ampere 优化版 DLSS-G 运行库）；0 = 关闭（游戏自带 DLSS-G 原样加载）。\r\n"
@@ -1776,13 +1805,15 @@ def verify_payload(runtime: str = "") -> list[str]:
 def _all_known_hashes() -> set[str]:
     """当前 payload 与历史版本的入口哈希合集（识别本项目部署）。
 
-    含四部分：当前 0.3.2、上一版 0.3.1（PAYLOAD_SHA256_PREV）、
-    再上一版 0.3.0（PAYLOAD_SHA256_030）、更早的 native 模式
-    （PAYLOAD_SHA256_LEGACY）。升级部署时据此判定「这是本项目写入的
-    文件」，可直接覆盖而不误判为第三方文件。
+    含五部分：当前 0.3.4、上一版 0.3.2（PAYLOAD_SHA256_PREV）、
+    0.3.1（PAYLOAD_SHA256_031）、0.3.0（PAYLOAD_SHA256_030）、
+    更早的 native 模式（PAYLOAD_SHA256_LEGACY）。
+    0.3.3 被跳过（有已知 RTX 30 崩溃，本工具从未发布过内嵌它的版本）。
+    升级部署时据此判定「这是本项目写入的文件」，可直接覆盖而不误判为第三方文件。
     """
     return (set(PAYLOAD_SHA256.values())
             | set(PAYLOAD_SHA256_PREV.values())
+            | set(PAYLOAD_SHA256_031.values())
             | set(PAYLOAD_SHA256_030.values())
             | set(PAYLOAD_SHA256_LEGACY.values()))
 
@@ -1835,7 +1866,7 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
 
     runtime: 内嵌运行库版本（310.9 / 310.1），照搬上游两个发布包的结构；
              310.9 上限 6X，310.1 上限 4X。
-    tier:    一致性档位 0–3（上游 0.3.2 的 Optimized）。310.1 上会被钳到 1。
+    tier:    一致性档位 0–3（上游 0.3.2 起的 Optimized）。310.1 上会被钳到 1。
     router/bilinear: 仅保留以兼容旧调用方，代理模式已无对应 ini 键。
     """
     logs: list[str] = []

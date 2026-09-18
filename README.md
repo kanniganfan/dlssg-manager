@@ -6,7 +6,7 @@
 
 简体中文 · 繁體中文 · English
 
-[![Release](https://img.shields.io/badge/Release-v1.7.3-5B8CFF)](#下载与安装)
+[![Release](https://img.shields.io/badge/Release-v1.7.4-5B8CFF)](#下载与安装)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-333D52)](#下载与安装)
 [![Upstream](https://img.shields.io/badge/Upstream-dlssg__for__sm86-9B7BFF)](#致谢与出处)
 
@@ -131,12 +131,12 @@ DLSSG Manager 自动扫描本机已安装的 D3D12 游戏，定位真正的渲�
 
 ## 下载与安装
 
-前往 [**Releases**](../../releases) 页面下载对应版本（当前 **v1.7.3**）：
+前往 [**Releases**](../../releases) 页面下载对应版本（当前 **v1.7.4**）：
 
 | 版本 | 文件 | 适合人群 |
 |---|---|---|
-| **免安装便携版** | `DLSSG_Manager_1.7.3_portable_x64.zip` | 想即解压即用、绿色不写注册表 |
-| **标准安装版** | `DLSSG_Manager_1.7.3_setup_x64.exe` | 想要安装向导、开始菜单/桌面快捷方式与完整卸载 |
+| **免安装便携版** | `DLSSG_Manager_1.7.4_portable_x64.zip` | 想即解压即用、绿色不写注册表 |
+| **标准安装版** | `DLSSG_Manager_1.7.4_setup_x64.exe` | 想要安装向导、开始菜单/桌面快捷方式与完整卸载 |
 
 **便携版**：解压到任意目录，双击 `DLSSG Manager.exe` 即可。
 **安装版**：双击 setup，按向导选择目录安装；卸载请到「设置 → 应用 → 安装的应用」或

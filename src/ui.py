@@ -1541,7 +1541,7 @@ class MainWindow(QWidget):
 
         self.gpu_pill = Pill(tr('路由 {0}').format(self.gpu.route), "info" if self.gpu.supported else "warn")
         lay.addWidget(self.gpu_pill)
-        lay.addWidget(Pill(tr('SM86 / SM75 内核 · 0.3.2'), "purple"))
+        lay.addWidget(Pill(tr('SM86 / SM75 内核 · 0.3.4'), "purple"))
         return w
 
     # ------------------------------------------------- 左侧列表
@@ -2115,7 +2115,7 @@ class MainWindow(QWidget):
         r2.add(self.sw_log)
         cl.addWidget(r2)
 
-        # 配置行 3：一致性档位（上游 0.3.2 的 [FrameGeneration] Optimized 0–3）。
+        # 配置行 3：一致性档位（上游 0.3.2 起的 [FrameGeneration] Optimized 0–3）。
         # 判据只有一条：允许生成的画面偏离官方运行库多远。档位越高越快。
         # 说明文字单独占一整行（不放在 FlowRow 里）—— 放进 FlowRow 时它只能拿到
         # 剩余宽度，中英文都会折成 3 行且断在「（不再 / 是逐位一致」这种词中间，
