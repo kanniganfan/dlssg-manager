@@ -1541,7 +1541,10 @@ class MainWindow(QWidget):
 
         self.gpu_pill = Pill(tr('路由 {0}').format(self.gpu.route), "info" if self.gpu.supported else "warn")
         lay.addWidget(self.gpu_pill)
-        lay.addWidget(Pill(tr('SM86 / SM75 内核 · 0.3.4'), "purple"))
+        # 版本号走占位符 + core.MOD_VERSION，不在词典里硬编码 ——
+        # 否则每次同步上游都要同时改 i18n 键，漏改就会让英文/繁中界面
+        # 回退成中文（v1.7.3 → v1.7.4 就漏过一次，键还停在 0.3.2）。
+        lay.addWidget(Pill(tr('SM86 / SM75 内核 · {0}').format(core.MOD_VERSION), "purple"))
         return w
 
     # ------------------------------------------------- 左侧列表

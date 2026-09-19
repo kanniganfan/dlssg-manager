@@ -29,9 +29,13 @@ import i18n
 from i18n import tr  # 多语言：中文字面量为源键，详见 i18n.py
 
 APP_NAME = "DLSSG Manager"
-APP_VERSION = "1.7.4"
+APP_VERSION = "1.7.5"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
-MOD_NAME = "DLSSG SM86 0.3.4"
+
+# 内嵌的上游 Mod 版本 —— 全项目只在这里声明一次。
+# MOD_NAME 供界面/日志显示，PAYLOAD_SHA256 由它索引到对应版本的哈希表。
+MOD_VERSION = "0.3.5"
+MOD_NAME = f"DLSSG SM86 {MOD_VERSION}"
 
 INI_NAME = "dlssg_sm86.ini"
 LOG_DIR_NAME = "dlssg_sm86"
@@ -70,90 +74,112 @@ PAYLOAD_SHA256_LEGACY = {
     "altnative/dxgi.dll": "8d29eddbd7f1c3e272d07f94ab8812a80ef5b7aeb73923320bf9a432ddcf74c0",
 }
 
-# 上游 0.3.0（commit 7880d3d）的 12 个代理 DLL —— 仅用于识别最老的部署。
-PAYLOAD_SHA256_030 = {
-    # --- 0.3.0 310.9（根目录）---
-    "version.dll": "a22d2453f25d7df3fdc0d6d683c21f01769a115439d58f1341183a75faaf8c7d",
-    "alternatives/winmm.dll": "197f97e90541ae688d291ef388b1eddc0c55cb657603eb55dea2d3d178b1e384",
-    "alternatives/dbghelp.dll": "10e2fe2d84b8b674e184891ca5211b01c43c6700e1c8b8c6d4969286f653bff8",
-    "alternatives/dinput8.dll": "01fdd5e77e64045400a2e7b6f35f98f3403335e30cd9def0e996f78240aa65da",
-    "alternatives/dxgi.dll": "ae37150fe056f3388571481ad4aaf78fad720e9b52eb7e6e1e9d2dff85df841e",
-    "alternatives/d3d12.dll": "63e7c3a1ba0b10e37e1a162ccf3aa2e19a0f7359de63787585c09baffd67ad45",
-    # --- 0.3.0 310.1（310.1/ 子目录）---
-    "310.1/version.dll": "4646fe15a21c01d251865253f55cefd5892dd2e561ece0c8efa49ae78b5de32e",
-    "310.1/alternatives/winmm.dll": "dde7ec668130b09f807338c4c594609a75349860bb5ca4428797f6ab2175b9c1",
-    "310.1/alternatives/dbghelp.dll": "1537a207f6490f49373ac8164e2021e6f25bd212e4abc8564dfd8110ad3afe28",
-    "310.1/alternatives/dinput8.dll": "e87a61ef84f60b58e5f3b841006992a30d8fd2998096f065b317e7126ebccd9b",
-    "310.1/alternatives/dxgi.dll": "f8d823609f994861d27abf50c9cb78386202650f8da1c868eaa2a40f13feef70",
-    "310.1/alternatives/d3d12.dll": "337ed97b9303192915e6edcac0310dca8817f72baa414dffa83d238cdb2ca724",
+# 当前内嵌与历史版本的入口哈希，按上游版本号索引（识别本项目部署）。
+# 键为「包内相对路径去掉运行库前缀」。
+# 同步上游时只需两步：在下面加一条新版本、把 MOD_VERSION 改成它。
+#   · 当前 0.3.5 —— 修复自 0.3.0 起「游戏重建帧生成特性后用错优化内核」的缺陷
+#     （花屏 / 随机崩溃 / 驱动重置，#561；Optimized=0 不受影响）。
+#   · 0.3.4 —— 修复 0.3.3 在 RTX 30 上的驱动重置崩溃。
+#   · 0.3.2 —— 重写 310.9 的 26 个推理内核；档位由 0/1 改为 0–3 四级。
+#   · 0.3.1 —— 恢复 RTX 20（SM75）支持、INI 逐键回退、出厂 4X。
+#   · 0.3.0 —— 代理模式首版。
+# 保留全部历史版本，是为了让旧部署能被认出来、直接覆盖升级，
+# 而不是被误判成第三方文件。
+PAYLOAD_SHA256_BY_VERSION: dict[str, dict[str, str]] = {
+    "0.3.5": {
+        # --- 310.9（根目录，上游 0.3.5）---
+        "version.dll": "c3934a09399f022504227c72df0bf8c0de55f9a08880dddde898c5262cefa838",
+
+        # --- 310.1（310.1/ 子目录，上游 0.3.5）---
+        "alternatives/winmm.dll": "bc3cef25c1ccbbdccdd93db9fae845104bb6c71fd433240e26641881a7e46658",
+        "alternatives/dbghelp.dll": "dfe7f44baa68d237dfe040d4b4cfc9bd44b01e661f3051996db1144e6bb388cb",
+        "alternatives/dinput8.dll": "4fbad08bb9360a1cd1309a82586353484fe64b7220199344ab83fae308176c6b",
+        "alternatives/dxgi.dll": "52e67020a725c74d5dee62aee4dc166a2f4e5c3adabf04ecab3005ab968fc24d",
+        "alternatives/d3d12.dll": "64b7ecc3f6d70011feed8dfaa20ce500522e8b04170142e2a2000146b4d7ac71",
+        "310.1/version.dll": "4ba7fecc68e2229193757839f326176a4f0f4325baab3c324007e0ea844e4d17",
+        "310.1/alternatives/winmm.dll": "a62e669d2ceae7645cbafe98d1df69892ede07bf78166acf2185a8beb9843a85",
+        "310.1/alternatives/dbghelp.dll": "fc58ee19b315732821ea3216d4d360972c38ce076ebc7d730b3f601c0e5c4a2c",
+        "310.1/alternatives/dinput8.dll": "ed56447cefa8b5836ec39116db620c289cac783fba938a9740c7a1b845a6ffaa",
+        "310.1/alternatives/dxgi.dll": "682e9a1318c5e2cb4ccf490c6cabfa2f119bf2f4793ced9c68ea56f3a21dc288",
+        "310.1/alternatives/d3d12.dll": "1b6c39e4e2aa34e216d70d991ecb3d83eb6bdc01fa5e977a2e837f4433f77f2b",
+    },
+
+    "0.3.4": {
+        # --- 310.9（根目录，上游 0.3.4）---
+        "version.dll": "575c9bb475c836cef3c40d7195656955e14220aa9f0f7dde9d817a91911cb85f",
+
+        # --- 310.1（310.1/ 子目录，上游 0.3.4）---
+        "alternatives/winmm.dll": "84bfa1c4a68711439a92400cce5f80ce0ba3378caefb17b85e388a0fb60bc53c",
+        "alternatives/dbghelp.dll": "50e1c50cb45a5512bcead3ea22da560776db67f7ab8f7fe9c583b4ecee7b7a41",
+        "alternatives/dinput8.dll": "ccc0fc43f9ac1a622f37c71ea480dd75641cb6426af8023ed344a89189af5c8c",
+        "alternatives/dxgi.dll": "af12e17d4fc22d94fa84f7fe9f306c43ebfd9dcb7cbeb41d01a018138586a922",
+        "alternatives/d3d12.dll": "517f70f46d6b2354514fb5461c53c0db9b9ef0dae46d16c05b92d2fc843514db",
+        "310.1/version.dll": "a4d04765f9e679aa91bfc9784253b7bd8d0ada828de7ed36e322ce714988de47",
+        "310.1/alternatives/winmm.dll": "8738dd6028db37a8269bbc7b71a1616abd352bb46c60de805b201883dad0d05e",
+        "310.1/alternatives/dbghelp.dll": "29e7ede3d1d6a27dff0795d5fb084874052f8df79534a722ad97e98da6dc36d8",
+        "310.1/alternatives/dinput8.dll": "7f18c06d48f9a0836eac23105627aaa1b799ae0bd7a45c4d84c87032e5e994eb",
+        "310.1/alternatives/dxgi.dll": "44754245d1e27675004fcd1a6b297b999377c65db0004c31bc617edb7a7aa5dd",
+        "310.1/alternatives/d3d12.dll": "081b0fe43db0e8f2caa1c3457538f972859e9e5fca61461363d4f78d28861d26",
+    },
+
+    "0.3.2": {
+        # --- 310.9（根目录，上游 0.3.2）---
+        "version.dll": "39b16f2cdb16450f0edc0e0b14231951e10954131ad9aa12037700e18dc91040",
+
+        # --- 310.1（310.1/ 子目录，上游 0.3.2）---
+        "alternatives/winmm.dll": "f36ced34bbcd28c09f70c0d6adad2e1f9b1659cda46a204cc01a38d1ae86da37",
+        "alternatives/dbghelp.dll": "67e04932c9e1d980d6431ec626f4db21b78a1375e95de6e7e9366f58f0cb9a65",
+        "alternatives/dinput8.dll": "6fe34c8c291fb5be21184076b14b52b6e01de88a263ae0d10f6daa68e0bb5d4e",
+        "alternatives/dxgi.dll": "988f1da4397779fd901924d793dba967d0ffa44bfaa8f9ab25b5c5641ab93ffc",
+        "alternatives/d3d12.dll": "5b36c5d068b64f7413d75d30fcfa35539da26bd75452bab2a1340baf26da0fe8",
+        "310.1/version.dll": "a1f5e4c8c43238de5b639ef858fb67fbb1874e5e8681833bc3ffff4d3b573c50",
+        "310.1/alternatives/winmm.dll": "f20bff1fa5f9a9dc6b7a35ce16fc8c743a7a34a1a47c116283b682f2260b6107",
+        "310.1/alternatives/dbghelp.dll": "d17643ae2aed871a646f92ff6613e0604dedab2dc4ec8c8f7f2294f1ec9f7013",
+        "310.1/alternatives/dinput8.dll": "1893acb44f84185a21a5a92b6349a2227e39cefb6a901bae1025174b5c60261a",
+        "310.1/alternatives/dxgi.dll": "ecc28978ff578489ea88fbd9f1c18b566f8b5d5574003e947dfbfa66e177544c",
+        "310.1/alternatives/d3d12.dll": "05a83f28c942148e75d11897cc9ea9f1f3a90613a3e0aac2eea0118a016fcc54",
+    },
+
+    "0.3.1": {
+        # --- 310.9（根目录，上游 0.3.1）---
+        "version.dll": "3d4c7d537a6e71e3a9d41ffc6487e054b26c56d27b7c0825d39eaa7ef0c7e86d",
+
+        # --- 310.1（310.1/ 子目录，上游 0.3.1）---
+        "alternatives/winmm.dll": "40eaa7dff6eb6281917eb84aa1c6e580c9e69f8736b647d28decb561f6efd7eb",
+        "alternatives/dbghelp.dll": "13071d2a8cccd5a4707eedd5ccf00aee6df8b6aceba03e7c1dda9358f0f2c998",
+        "alternatives/dinput8.dll": "9f77a9070a7a3277f3d7e405e49e61de7e53101e2925f75bacd9cc204e14a0da",
+        "alternatives/dxgi.dll": "539138464137855f5962811588000a95897b3ddb14f5b44a197e37c3e17bd9fb",
+        "alternatives/d3d12.dll": "30b48198f0cd100827037bdbe27b2a15bc050ff1c276c520ffc41705920f07b1",
+        "310.1/version.dll": "ca4146f76d4b176d17246d8c0e66042c57f7b25dcabea3200b33821522597211",
+        "310.1/alternatives/winmm.dll": "2312e761ee589204ddf4d402c1ae36367aa73d9bcd9fdfd9bbe56c06604a63e6",
+        "310.1/alternatives/dbghelp.dll": "c4679d28f69e5c99aec290725ef930a2fc58c657514f65f650efdbb0a308143c",
+        "310.1/alternatives/dinput8.dll": "94767cc139f8ecb6373765cd102cc85a28601cd55101f53ae854e61a4cbf4868",
+        "310.1/alternatives/dxgi.dll": "7dec971ff126f427b855d1238ff2b2ecb6ab7616c467776f882e7a4e244cc5b5",
+        "310.1/alternatives/d3d12.dll": "77860075059a630a90327e417cae7db6067ff56878ddb429d5d741c813dd4995",
+    },
+
+    "0.3.0": {
+        # --- 310.9（根目录，上游 0.3.0）---
+        "version.dll": "a22d2453f25d7df3fdc0d6d683c21f01769a115439d58f1341183a75faaf8c7d",
+
+        # --- 310.1（310.1/ 子目录，上游 0.3.0）---
+        "alternatives/winmm.dll": "197f97e90541ae688d291ef388b1eddc0c55cb657603eb55dea2d3d178b1e384",
+        "alternatives/dbghelp.dll": "10e2fe2d84b8b674e184891ca5211b01c43c6700e1c8b8c6d4969286f653bff8",
+        "alternatives/dinput8.dll": "01fdd5e77e64045400a2e7b6f35f98f3403335e30cd9def0e996f78240aa65da",
+        "alternatives/dxgi.dll": "ae37150fe056f3388571481ad4aaf78fad720e9b52eb7e6e1e9d2dff85df841e",
+        "alternatives/d3d12.dll": "63e7c3a1ba0b10e37e1a162ccf3aa2e19a0f7359de63787585c09baffd67ad45",
+        "310.1/version.dll": "4646fe15a21c01d251865253f55cefd5892dd2e561ece0c8efa49ae78b5de32e",
+        "310.1/alternatives/winmm.dll": "dde7ec668130b09f807338c4c594609a75349860bb5ca4428797f6ab2175b9c1",
+        "310.1/alternatives/dbghelp.dll": "1537a207f6490f49373ac8164e2021e6f25bd212e4abc8564dfd8110ad3afe28",
+        "310.1/alternatives/dinput8.dll": "e87a61ef84f60b58e5f3b841006992a30d8fd2998096f065b317e7126ebccd9b",
+        "310.1/alternatives/dxgi.dll": "f8d823609f994861d27abf50c9cb78386202650f8da1c868eaa2a40f13feef70",
+        "310.1/alternatives/d3d12.dll": "337ed97b9303192915e6edcac0310dca8817f72baa414dffa83d238cdb2ca724",
+    },
 }
 
-# 上游 0.3.1（commit f275d45）重建的全部 12 个代理 DLL。
-# 相对 0.3.0：恢复 RTX 20（SM75）支持、INI 逐键回退、出厂 4X、fg_gate 诊断；
-# 所有 DLL 重编译重签名，体积约 26.7~28.3 MB（0.3.0 为 17.5~19.0 MB）。
-# 保留本表用于识别 v1.6.0 部署（升级时可直接覆盖，不误判为第三方文件）。
-PAYLOAD_SHA256_031 = {
-    # --- 0.3.1 310.9（根目录）---
-    "version.dll": "3d4c7d537a6e71e3a9d41ffc6487e054b26c56d27b7c0825d39eaa7ef0c7e86d",
-    "alternatives/winmm.dll": "40eaa7dff6eb6281917eb84aa1c6e580c9e69f8736b647d28decb561f6efd7eb",
-    "alternatives/dbghelp.dll": "13071d2a8cccd5a4707eedd5ccf00aee6df8b6aceba03e7c1dda9358f0f2c998",
-    "alternatives/dinput8.dll": "9f77a9070a7a3277f3d7e405e49e61de7e53101e2925f75bacd9cc204e14a0da",
-    "alternatives/dxgi.dll": "539138464137855f5962811588000a95897b3ddb14f5b44a197e37c3e17bd9fb",
-    "alternatives/d3d12.dll": "30b48198f0cd100827037bdbe27b2a15bc050ff1c276c520ffc41705920f07b1",
-    # --- 0.3.1 310.1（310.1/ 子目录）---
-    "310.1/version.dll": "ca4146f76d4b176d17246d8c0e66042c57f7b25dcabea3200b33821522597211",
-    "310.1/alternatives/winmm.dll": "2312e761ee589204ddf4d402c1ae36367aa73d9bcd9fdfd9bbe56c06604a63e6",
-    "310.1/alternatives/dbghelp.dll": "c4679d28f69e5c99aec290725ef930a2fc58c657514f65f650efdbb0a308143c",
-    "310.1/alternatives/dinput8.dll": "94767cc139f8ecb6373765cd102cc85a28601cd55101f53ae854e61a4cbf4868",
-    "310.1/alternatives/dxgi.dll": "7dec971ff126f427b855d1238ff2b2ecb6ab7616c467776f882e7a4e244cc5b5",
-    "310.1/alternatives/d3d12.dll": "77860075059a630a90327e417cae7db6067ff56878ddb429d5d741c813dd4995",
-}
+# 保留原名给现有调用方（verify_payload / 校验脚本）用。
+PAYLOAD_SHA256 = PAYLOAD_SHA256_BY_VERSION[MOD_VERSION]
 
-# 上游 0.3.2 的 12 个代理 DLL —— 上一版（PAYLOAD_SHA256_PREV）。
-# 0.3.2 重写 310.9 的 26 个推理内核：画面与官方逐位一致且更快；
-# Optimized 由 0/1 两态改为 0–3 四级档位。v1.7.0~v1.7.3 部署的是这套。
-PAYLOAD_SHA256_PREV = {
-    # --- 0.3.2 310.9（根目录）---
-    "version.dll": "39b16f2cdb16450f0edc0e0b14231951e10954131ad9aa12037700e18dc91040",
-    "alternatives/winmm.dll": "f36ced34bbcd28c09f70c0d6adad2e1f9b1659cda46a204cc01a38d1ae86da37",
-    "alternatives/dbghelp.dll": "67e04932c9e1d980d6431ec626f4db21b78a1375e95de6e7e9366f58f0cb9a65",
-    "alternatives/dinput8.dll": "6fe34c8c291fb5be21184076b14b52b6e01de88a263ae0d10f6daa68e0bb5d4e",
-    "alternatives/dxgi.dll": "988f1da4397779fd901924d793dba967d0ffa44bfaa8f9ab25b5c5641ab93ffc",
-    "alternatives/d3d12.dll": "5b36c5d068b64f7413d75d30fcfa35539da26bd75452bab2a1340baf26da0fe8",
-    # --- 0.3.2 310.1（310.1/ 子目录）---
-    "310.1/version.dll": "a1f5e4c8c43238de5b639ef858fb67fbb1874e5e8681833bc3ffff4d3b573c50",
-    "310.1/alternatives/winmm.dll": "f20bff1fa5f9a9dc6b7a35ce16fc8c743a7a34a1a47c116283b682f2260b6107",
-    "310.1/alternatives/dbghelp.dll": "d17643ae2aed871a646f92ff6613e0604dedab2dc4ec8c8f7f2294f1ec9f7013",
-    "310.1/alternatives/dinput8.dll": "1893acb44f84185a21a5a92b6349a2227e39cefb6a901bae1025174b5c60261a",
-    "310.1/alternatives/dxgi.dll": "ecc28978ff578489ea88fbd9f1c18b566f8b5d5574003e947dfbfa66e177544c",
-    "310.1/alternatives/d3d12.dll": "05a83f28c942148e75d11897cc9ea9f1f3a90613a3e0aac2eea0118a016fcc54",
-}
-
-# 当前内嵌：上游 0.3.4 的 12 个代理 DLL（2026-09-18 发布）。
-# 相对 0.3.2 的两个版本：
-#   0.3.3 架构改写提前到游戏启动并改报 RTX 50（Streamline 2.8 游戏不再卸掉
-#         帧生成插件，#509/#528）；Optimized=1 不再默认跳过重复真实帧拷贝
-#         （SkipRepeatedRealCopy，默认关，修复 0.3.2 闪烁 #532）。
-#   0.3.4 修复 0.3.3 在 RTX 30 上的驱动重置崩溃（NVIDIA App DLSS 覆盖 / NGX
-#         在线更新生效时，超分模型误收了给 Streamline 的架构改写；#535 等）。
-#         现在 NVIDIA 自己的组件一律得到真实架构，改写只对 Streamline 和游戏生效。
-# 直接跳过 0.3.3（它有已知崩溃），从 0.3.2 升到 0.3.4。
-PAYLOAD_SHA256 = {
-    # --- 310.9（根目录，上游 0.3.4）---
-    "version.dll": "575c9bb475c836cef3c40d7195656955e14220aa9f0f7dde9d817a91911cb85f",
-    "alternatives/winmm.dll": "84bfa1c4a68711439a92400cce5f80ce0ba3378caefb17b85e388a0fb60bc53c",
-    "alternatives/dbghelp.dll": "50e1c50cb45a5512bcead3ea22da560776db67f7ab8f7fe9c583b4ecee7b7a41",
-    "alternatives/dinput8.dll": "ccc0fc43f9ac1a622f37c71ea480dd75641cb6426af8023ed344a89189af5c8c",
-    "alternatives/dxgi.dll": "af12e17d4fc22d94fa84f7fe9f306c43ebfd9dcb7cbeb41d01a018138586a922",
-    "alternatives/d3d12.dll": "517f70f46d6b2354514fb5461c53c0db9b9ef0dae46d16c05b92d2fc843514db",
-    # --- 310.1（310.1/ 子目录，上游 0.3.4）---
-    "310.1/version.dll": "a4d04765f9e679aa91bfc9784253b7bd8d0ada828de7ed36e322ce714988de47",
-    "310.1/alternatives/winmm.dll": "8738dd6028db37a8269bbc7b71a1616abd352bb46c60de805b201883dad0d05e",
-    "310.1/alternatives/dbghelp.dll": "29e7ede3d1d6a27dff0795d5fb084874052f8df79534a722ad97e98da6dc36d8",
-    "310.1/alternatives/dinput8.dll": "7f18c06d48f9a0836eac23105627aaa1b799ae0bd7a45c4d84c87032e5e994eb",
-    "310.1/alternatives/dxgi.dll": "44754245d1e27675004fcd1a6b297b999377c65db0004c31bc617edb7a7aa5dd",
-    "310.1/alternatives/d3d12.dll": "081b0fe43db0e8f2caa1c3457538f972859e9e5fca61461363d4f78d28861d26",
-}
 
 
 def runtime_prefix(rt: str) -> str:
@@ -1805,17 +1831,15 @@ def verify_payload(runtime: str = "") -> list[str]:
 def _all_known_hashes() -> set[str]:
     """当前 payload 与历史版本的入口哈希合集（识别本项目部署）。
 
-    含五部分：当前 0.3.4、上一版 0.3.2（PAYLOAD_SHA256_PREV）、
-    0.3.1（PAYLOAD_SHA256_031）、0.3.0（PAYLOAD_SHA256_030）、
-    更早的 native 模式（PAYLOAD_SHA256_LEGACY）。
-    0.3.3 被跳过（有已知 RTX 30 崩溃，本工具从未发布过内嵌它的版本）。
-    升级部署时据此判定「这是本项目写入的文件」，可直接覆盖而不误判为第三方文件。
+    含两部分：按版本索引的代理模式表（PAYLOAD_SHA256_BY_VERSION，
+    0.3.0 ~ 当前）、更早的 native 模式表（PAYLOAD_SHA256_LEGACY）。
+    升级部署时据此判定「这是本项目写入的文件」，可直接覆盖而不误判为
+    第三方文件 —— 所以历史版本的表不能删，删了老用户升级会被当成占用。
     """
-    return (set(PAYLOAD_SHA256.values())
-            | set(PAYLOAD_SHA256_PREV.values())
-            | set(PAYLOAD_SHA256_031.values())
-            | set(PAYLOAD_SHA256_030.values())
-            | set(PAYLOAD_SHA256_LEGACY.values()))
+    known = set(PAYLOAD_SHA256_LEGACY.values())
+    for table in PAYLOAD_SHA256_BY_VERSION.values():
+        known |= set(table.values())
+    return known
 
 
 def pick_entry(exe_dir: str, prefer: str = "") -> tuple[str, str]:
