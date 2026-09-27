@@ -206,6 +206,7 @@ scripts/   构建、校验与维护脚本
 |---|---|
 | `check_tuple_arity.py` | 校验 `ENTRIES` / `RUNTIMES` 等常量表的元组长度一致 |
 | `check_i18n_keys.py` | 对比 `src/` 里 `tr()` 用到的键与词典，列出缺失 / 多余 |
+| `check_upstream_sync.py` | 检查上游是否有新版本，并用 git blob SHA-1 验证本地 payload 与上游 HEAD 是否逐字节一致（退出码 0=已同步 / 1=需同步） |
 | `smoke_ui.py` | 离屏 UI 冒烟：档位联动、`FlowRow` 换行、toast 定位、按钮不裁字、更新检测三态 |
 | `e2e_deploy.py` | 临时目录里跑 部署 → 读回 → 恢复 闭环 |
 | `build_release.py` | 打包便携版 zip + NSIS 安装器 |
