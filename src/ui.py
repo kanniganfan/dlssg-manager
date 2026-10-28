@@ -15,8 +15,8 @@ from PySide6.QtGui import (QAction, QBrush, QColor, QCursor, QFont, QFontDatabas
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QComboBox,
                                QFileDialog, QFrame, QGraphicsDropShadowEffect, QGridLayout,
                                QHBoxLayout, QLabel, QLineEdit, QMenu, QPlainTextEdit,
-                               QPushButton, QScrollArea, QSizeGrip, QSizePolicy, QStackedWidget,
-                               QVBoxLayout, QWidget, QLayout, QLayoutItem)
+                               QMessageBox, QPushButton, QScrollArea, QSizeGrip, QSizePolicy, QStackedWidget,
+                               QStyledItemDelegate, QStyle, QVBoxLayout, QWidget, QLayout, QLayoutItem)
 
 import core
 import i18n
@@ -66,6 +66,9 @@ QWidget { color: TEXT; font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif
 
 /* 档位说明：整行铺满，左内缩对齐到「一致性档位」标签右侧，字号略小、颜色次要 */
 #tierHint { font-size: 11px; color: MUTED; padding-left: 76px; }
+
+/* 预设 / 超分说明：常驻显示，跟随当前选择更新，不依赖鼠标悬停 */
+#optionHint { font-size: 11px; color: MUTED; padding-left: 76px; line-height: 150%; }
 
 QPushButton#ghost { background: CARD2; border: 1px solid LINE2; border-radius: 10px;
                     padding: 8px 15px; color: TEXT; font-size: 12px; font-weight: 500; }
@@ -277,6 +280,99 @@ class Combo(QComboBox):
         path.lineTo(x + 3.6, y - 1.6)
         p.drawPath(path)
         p.end()
+
+
+class HelpItemDelegate(QStyledItemDelegate):
+    """把下拉弹层里的每一项画成「取值 + 说明」两行。
+
+    只挂在弹层视图上（不挂到 QComboBox 自身），所以收起时仍然只显示取值。
+    说明文字与 tooltip 共用同一份词典，避免两处文案不一致。
+    """
+
+    PAD = 9
+    GAP = 3
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.help_map: dict[str, str] = {}
+        self.popup_width = 380
+
+    def _help_of(self, index) -> str:
+        value = index.data(Qt.UserRole)
+        if value is None:
+            value = index.data(Qt.DisplayRole)
+        return self.help_map.get(str(value), "")
+
+    def sizeHint(self, option, index) -> QSize:
+        base = super().sizeHint(option, index)
+        text = self._help_of(index)
+        if not text:
+            return base
+        width = max(120, self.popup_width - 2 * self.PAD)
+        f = QFont(option.font)
+        f.setBold(True)
+        h_value = QFontMetrics(f).height()
+        h_help = option.fontMetrics.boundingRect(
+            QRect(0, 0, width, 4000), Qt.TextWordWrap, text).height()
+        return QSize(base.width(), self.PAD + h_value + self.GAP + h_help + self.PAD)
+
+    def paint(self, painter, option, index) -> None:
+        text = self._help_of(index)
+        if not text:
+            super().paint(painter, option, index)
+            return
+        value = str(index.data(Qt.DisplayRole) or "")
+        selected = bool(option.state & QStyle.State_Selected)
+        r = option.rect
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        if selected:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(C["accent"]))
+            painter.drawRoundedRect(r.adjusted(2, 1, -2, -1), 7, 7)
+        f = QFont(option.font)
+        f.setBold(True)
+        fm = QFontMetrics(f)
+        painter.setFont(f)
+        painter.setPen(QColor("#FFFFFF") if selected else QColor(C["text"]))
+        painter.drawText(QRect(r.left() + self.PAD, r.top() + self.PAD,
+                               r.width() - 2 * self.PAD, fm.height()),
+                         Qt.AlignLeft | Qt.AlignTop, value)
+        y = r.top() + self.PAD + fm.height() + self.GAP
+        f2 = QFont(option.font)
+        painter.setFont(f2)
+        painter.setPen(QColor("#DCE6FF") if selected else QColor(C["muted"]))
+        painter.drawText(QRect(r.left() + self.PAD, y,
+                               r.width() - 2 * self.PAD,
+                               max(1, r.bottom() - y - self.PAD)),
+                         Qt.TextWordWrap | Qt.AlignLeft | Qt.AlignTop, text)
+        painter.restore()
+
+
+class HelpCombo(Combo):
+    """下拉项带解释的选择框：弹层展开后每项下方直接显示说明文字。"""
+
+    def __init__(self, parent=None, popup_width: int = 380):
+        super().__init__(parent)
+        self._delegate = HelpItemDelegate(self)
+        self._delegate.popup_width = popup_width
+        self._popup_width = popup_width
+        self.view().setItemDelegate(self._delegate)
+
+    def set_help(self, mapping: dict[str, str], popup_width: int | None = None) -> None:
+        self._delegate.help_map = dict(mapping)
+        if popup_width:
+            self._popup_width = popup_width
+            self._delegate.popup_width = popup_width
+        self.view().doItemsLayout()
+
+    def showPopup(self) -> None:
+        super().showPopup()
+        width = max(self.width(), self._popup_width)
+        popup = self.view().window()
+        if popup.width() < width:
+            popup.setMinimumWidth(width)
+            popup.resize(width, popup.height())
 
 
 class Segmented(QWidget):
@@ -651,6 +747,7 @@ class GameCard(QFrame):
     """左侧游戏列表项。"""
 
     clicked = Signal(str)
+    removeRequested = Signal(str)
 
     def __init__(self, game: core.Game):
         super().__init__()
@@ -692,7 +789,27 @@ class GameCard(QFrame):
         else:
             lay.addStretch(1)
 
+        # 右键卡片任意位置都打开相同的安全菜单。
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(
+            lambda pos: self._show_context_menu(self.mapToGlobal(pos)))
+        for child in self.findChildren(QWidget):
+            child.setContextMenuPolicy(Qt.CustomContextMenu)
+            child.customContextMenuRequested.connect(
+                lambda pos, target=child: self._show_context_menu(target.mapToGlobal(pos)))
+
         self._apply_style()
+
+    def _show_context_menu(self, global_pos) -> None:
+        menu = QMenu(self)
+        remove = menu.addAction(tr('从扫描列表移除并忽略'))
+        remove.setToolTip(tr('仅隐藏扫描结果，不删除游戏文件。'))
+        if self.game.deployed:
+            remove.setEnabled(False)
+            remove.setToolTip(tr('此游戏有本工具部署状态；请先一键恢复，再移除。'))
+        chosen = menu.exec(global_pos)
+        if chosen is remove:
+            self.removeRequested.emit(self.game.gid)
 
     def _short_path(self) -> str:
         p = self.game.exe_dir or self.game.install_dir
@@ -741,23 +858,42 @@ class GameCard(QFrame):
 
 # ---------------------------------------------------------------- 工作线程
 
+class BootWorker(QThread):
+    """在主界面动画期间读取显卡信息并校验运行包。"""
+
+    done = Signal(object, list, str)
+
+    def run(self) -> None:
+        try:
+            gpu = core.detect_gpu()
+            payload = core.payload_dir()
+            warns = core.verify_payload() if payload else []
+            self.done.emit(gpu, warns, "" if payload else "missing_payload")
+        except Exception as e:
+            self.done.emit(core.GpuInfo(), [], f"{type(e).__name__}: {e}")
+
+
 class ScanWorker(QThread):
     progress = Signal(str)
     done = Signal(list, list, str)
 
-    def __init__(self, deep: bool = False, roots: list[str] | None = None):
+    def __init__(self, deep: bool = False, roots: list[str] | None = None,
+                 extra: list[tuple[str, str, str]] | None = None):
         super().__init__()
         self.deep = deep
         self.roots = roots or []
+        self.extra = extra or []
 
     def run(self) -> None:
         try:
             st = core.load_state()
-            warns = core.verify_payload()
+            # BootWorker verifies the bundled payload once; deploy verifies it
+            # again before writing any game files.
             games = core.collect_games(st, progress=self.progress.emit,
                                        deep_roots=self.roots,
-                                       deep_budget=60.0 if self.roots else 0.0)
-            self.done.emit(games, warns, "")
+                                       deep_budget=60.0 if self.roots else 0.0,
+                                       extra=self.extra)
+            self.done.emit(games, [], "")
         except Exception as e:
             self.done.emit([], [], f"{type(e).__name__}: {e}")
 
@@ -897,8 +1033,8 @@ class Splash(QWidget):
 
     WORD = "KANNI"
     SUB = "DLSSG MANAGER"
-    MIN_MS = 2600      # 至少停留这么久
-    MAX_MS = 4200      # 最长等待这么久
+    MIN_MS = 1500      # 让开场动效走完一轮即可进入主界面
+    MAX_MS = 2600      # 初始化稍慢时仍保留一个短暂展示
 
     def __init__(self, parent=None, embedded: bool = False):
         super().__init__(parent)
@@ -916,25 +1052,25 @@ class Splash(QWidget):
         self._fade = 0.0            # 整体
         self._phase = 0             # 0=显示 1=淡出
         self._done = False
-        self._tick = 0
+        self._cache_key = None
+        self._background_cache = None
+        self._layout_cache = None
+        self._dynamic_rect = QRect()
 
         self._fade_in = QPropertyAnimation(self, b"fade", self)
-        self._fade_in.setDuration(420)
+        self._fade_in.setDuration(300)
         self._fade_in.setStartValue(0.0)
         self._fade_in.setEndValue(1.0)
         self._fade_in.setEasingCurve(QEasingCurve.OutCubic)
 
         self._anim = QVariantAnimation(self)
-        self._anim.setDuration(1500)
+        self._anim.setDuration(1200)
         self._anim.setStartValue(0.0)
         self._anim.setEndValue(1.0)
         self._anim.setEasingCurve(QEasingCurve.InOutSine)
         self._anim.valueChanged.connect(self._on_value)
         self._anim.finished.connect(self._loop)
 
-        self._timer = QTimer(self)
-        self._timer.setInterval(1000)
-        self._timer.timeout.connect(self._tick_loop)
 
     # 属性（供 QPropertyAnimation 使用）
     def _get_fade(self) -> float:
@@ -942,18 +1078,17 @@ class Splash(QWidget):
 
     def _set_fade(self, v: float) -> None:
         self._fade = v
-        self.update()
+        self._update_animation_region()
 
     fade = Property(float, _get_fade, _set_fade, notify=None)
 
     def start(self) -> None:
-        self._timer.start()
         self._fade_in.start()
         self._anim.start()
 
     def _on_value(self, v) -> None:
         self._progress = float(v)
-        self.update()
+        self._update_animation_region()
 
     def _loop(self) -> None:
         """一轮走完，反向再来，形成循环等待。"""
@@ -962,18 +1097,109 @@ class Splash(QWidget):
             else QVariantAnimation.Forward)
         self._anim.start()
 
-    def _tick_loop(self) -> None:
-        self._tick += 1
+    def _update_animation_region(self) -> None:
+        if self._dynamic_rect.isEmpty():
+            self.update()
+        else:
+            self.update(self._dynamic_rect)
+
+    def resizeEvent(self, e) -> None:
+        self._cache_key = None
+        self._background_cache = None
+        self._layout_cache = None
+        self._dynamic_rect = QRect()
+        super().resizeEvent(e)
+
+    def _ensure_static_cache(self) -> None:
+        w, h = self.width(), self.height()
+        dpr = float(self.devicePixelRatioF() or 1.0)
+        key = (w, h, round(dpr, 3), self.embedded)
+        if self._cache_key == key and self._background_cache is not None:
+            return
+        if w <= 0 or h <= 0:
+            return
+
+        physical_size = QSize(max(1, round(w * dpr)), max(1, round(h * dpr)))
+        background = QPixmap(physical_size)
+        background.setDevicePixelRatio(dpr)
+        background.fill(QColor("#05070B"))
+        p = QPainter(background)
+        p.setRenderHint(QPainter.Antialiasing)
+        radius = 16.0 if not self.embedded else 0.0
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, w, h), radius, radius)
+        grad = QLinearGradient(0, 0, w, h)
+        grad.setColorAt(0.0, QColor("#0B0E15"))
+        grad.setColorAt(1.0, QColor("#12161F"))
+        p.save()
+        p.setClipPath(path)
+        p.fillRect(QRectF(0, 0, w, h), QBrush(grad))
+        p.restore()
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(C["line"]), 1))
+        p.drawPath(path)
+        k = max(0.55, min(2.2, min(w / 1120.0, h / 720.0)))
+        cx, cy = w / 2, h / 2 - 8 * k
+        radius_glow = max(w, h) * 0.34
+        # The ambient glow is static; paint it into the cached backdrop rather
+        # than rebuilding a radial gradient on every animation frame.
+        radial = QRadialGradient(cx, cy, radius_glow)
+        radial.setColorAt(0.0, QColor(91, 140, 255, 34))
+        radial.setColorAt(1.0, QColor(91, 140, 255, 0))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(radial))
+        p.drawEllipse(QRectF(cx - radius_glow, cy - radius_glow,
+                             radius_glow * 2, radius_glow * 2))
+        p.end()
+
+        logo_font = QFont("Segoe UI")
+        logo_font.setPixelSize(max(18, int(round(62 * k))))
+        logo_font.setWeight(QFont.Black)
+        logo_font.setLetterSpacing(QFont.PercentageSpacing, 116)
+        logo_metrics = QFontMetricsF(logo_font)
+        advances = [logo_metrics.horizontalAdvance(ch) for ch in self.WORD]
+        total_width = sum(advances)
+        baseline = cy + logo_metrics.capHeight() / 2 + 2 * k
+        x_start = cx - total_width / 2
+        glyph_paths = []
+        glyph_x = x_start
+        for ch, advance in zip(self.WORD, advances):
+            glyph = QPainterPath()
+            glyph.addText(glyph_x, baseline, logo_font, ch)
+            glyph_paths.append(glyph)
+            glyph_x += advance
+        subtitle_font = QFont("Segoe UI")
+        subtitle_font.setPixelSize(max(8, int(round(12 * k))))
+        subtitle_font.setLetterSpacing(QFont.PercentageSpacing, 300)
+        subtitle_metrics = QFontMetricsF(subtitle_font)
+        subtitle_width = subtitle_metrics.horizontalAdvance(self.SUB)
+        half_width = max(total_width, subtitle_width) / 2 + 24 * k
+
+        self._scale = k
+        self._center = (cx, cy)
+        self._background_cache = background
+        self._layout_cache = {
+            "glyph_paths": glyph_paths,
+            "baseline": baseline,
+            "subtitle_font": subtitle_font,
+            "subtitle_x": cx - subtitle_width / 2,
+            "dot_y": baseline + 58 * k,
+            "gap": 16 * k,
+        }
+        self._dynamic_rect = QRect(
+            int(cx - half_width), int(baseline - 24 * k),
+            int(2 * half_width), int(110 * k),
+        ).intersected(self.rect())
+        self._cache_key = key
 
     def finish(self) -> None:
         """初始化完成，播放淡出。"""
         if self._phase:
             return
         self._phase = 1
-        self._timer.stop()
         self._anim.stop()
         self._out = QPropertyAnimation(self, b"fade", self)
-        self._out.setDuration(320)
+        self._out.setDuration(240)
         self._out.setStartValue(1.0)      # 从当前不透明度起淡出，避免跳变
         self._out.setEndValue(0.0)
         self._out.setEasingCurve(QEasingCurve.InCubic)
@@ -986,110 +1212,75 @@ class Splash(QWidget):
         self.finished.emit()
 
     def paintEvent(self, _e) -> None:
+        self._ensure_static_cache()
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setRenderHint(QPainter.TextAntialiasing)
         w, h = self.width(), self.height()
+        if self._background_cache is None or self._layout_cache is None:
+            p.fillRect(self.rect(), QColor("#05070B"))
+            p.end()
+            return
+        # 背景渐变、边框和中心光晕只按尺寸绘制一次，动效帧复用缓存。
+        p.drawPixmap(0, 0, self._background_cache)
 
         # 尺寸自适应：所有几何量按容器缩放（基准 1120x720），
         # 窗口变大/变小时动画整体等比放大缩小，不再用固定字号。
-        BASE_W, BASE_H = 1120.0, 720.0
-        k = max(0.55, min(2.2, min(w / BASE_W, h / BASE_H)))
-        self._scale = k
-
-        # 不透明绘制：先整块铺满（避免残留），再用圆角路径画背景
-        p.fillRect(self.rect(), QColor("#05070B"))
-        radius = 16.0 if not self.embedded else 0.0
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(0, 0, w, h), radius, radius)
-
-        # 渐变底
-        grad = QLinearGradient(0, 0, w, h)
-        grad.setColorAt(0.0, QColor("#0B0E15"))
-        grad.setColorAt(1.0, QColor("#12161F"))
-        p.save()
-        p.setClipPath(path)
-        p.fillRect(self.rect(), QBrush(grad))
-        p.restore()
-        # 圆角描边
-        p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(QColor(C["line"]), 1))
-        p.drawPath(path)
-
         a = max(0.0, min(1.0, self._fade))
         if a <= 0.01:
             p.end()
             return
 
         p.setOpacity(a)
-        cx, cy = w / 2, h / 2 - 8 * k
-
-        # 中心光晕（半径随容器缩放）
-        radius_glow = max(w, h) * 0.34
-        radial = QRadialGradient(cx, cy, radius_glow)
-        radial.setColorAt(0.0, QColor(91, 140, 255, 34))
-        radial.setColorAt(1.0, QColor(91, 140, 255, 0))
-        p.setPen(Qt.NoPen)
-        p.setBrush(QBrush(radial))
-        p.drawEllipse(QRectF(cx - radius_glow, cy - radius_glow,
-                             radius_glow * 2, radius_glow * 2))
+        k = self._scale
+        cx, cy = self._center
 
         # KANNI 逐字渐显：每个字符有自己的 [起, 起+0.42] 窗口。
         # 字号按容器缩放（基准 46pt @1120x720），窗口越大字越大。
-        f = QFont("Segoe UI")
-        f.setPixelSize(max(18, int(round(62 * k))))
-        f.setWeight(QFont.Black)
-        f.setLetterSpacing(QFont.PercentageSpacing, 116)
-        p.setFont(f)
-        fm = QFontMetricsF(f)
+        layout = self._layout_cache
         n = len(self.WORD)
         span = 0.42
         step = (1.0 - span) / max(1, n - 1)
-        adv = [fm.horizontalAdvance(ch) for ch in self.WORD]
-        total = sum(adv)
-        x = cx - total / 2
-        baseline = cy + fm.capHeight() / 2 + 2 * k
-        for i, ch in enumerate(self.WORD):
+        baseline = layout["baseline"]
+        for i in range(n):
             t0 = i * step
             raw = (self._progress - t0) / span
             kk = max(0.0, min(1.0, raw))
             kk = 1 - (1 - kk) ** 3                    # easeOutCubic
             if kk <= 0.001:
-                x += adv[i]
                 continue
             # 未完成的字符带一点上浮与光晕（幅度随容器缩放）
             rise = (1 - kk) * 16 * k
             glow = 26 * (kk ** 1.6) * (1 if self._progress < 1 else 0.6)
             col = QColor("#7FA3FF")
             col.setAlphaF(min(1.0, kk * 0.42))
+            glyph = layout["glyph_paths"][i]
             # 描边发光（用同一字符描边近似）
             if glow > 1:
-                gp = QPainterPath()
-                gp.addText(x, baseline - rise, f, ch)
+                p.save()
+                p.translate(0, -rise)
                 p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), int(glow * 2.2)),
                               2.0 * k))
                 p.setBrush(Qt.NoBrush)
-                p.drawPath(gp)
+                p.drawPath(glyph)
+                p.restore()
+            p.save()
+            p.translate(0, -rise)
             p.setPen(QColor(233, 236, 241, int(255 * kk)))
-            p.drawText(QPointF(x, baseline - rise), ch)
-            x += adv[i]
+            p.drawPath(glyph)
+            p.restore()
 
         # 副标题（字号随容器缩放）
-        f2 = QFont("Segoe UI")
-        f2.setPixelSize(max(8, int(round(12 * k))))
-        f2.setLetterSpacing(QFont.PercentageSpacing, 300)
+        f2 = layout["subtitle_font"]
         p.setFont(f2)
-        p.setPen(QColor(139, 147, 163, int(150 * a)))
-        sub = self.SUB
-        fm2 = QFontMetricsF(f2)
-        p.drawText(QPointF(cx - fm2.horizontalAdvance(sub) / 2,
-                           baseline + 34 * k), sub)
+        p.setPen(QColor(139, 147, 163, 150))
+        p.drawText(QPointF(layout["subtitle_x"], baseline + 34 * k), self.SUB)
 
         # 载入点：三个点依次呼吸（位置与半径随容器缩放）
-        dot_y = baseline + 58 * k
-        gap = 16 * k
+        dot_y = layout["dot_y"]
+        gap = layout["gap"]
         for i in range(3):
-            ph = (self._tick * 0.42 + i * 0.28) % 1.0
+            ph = (self._progress + i * 0.28) % 1.0
             breathe = 0.35 + 0.65 * (1 - abs(ph * 2 - 1))
             r = (2.6 + 1.6 * breathe) * k
             p.setPen(Qt.NoPen)
@@ -1123,7 +1314,7 @@ class MainWindow(QWidget):
     def __init__(self, shot_mode: bool = False):
         super().__init__()
         self.shot_mode = shot_mode
-        self.gpu = core.detect_gpu()
+        self.gpu = core.GpuInfo()
         self.games: list[core.Game] = []
         self.current: core.Game | None = None
         self.cards: dict[str, GameCard] = {}
@@ -1139,7 +1330,7 @@ class MainWindow(QWidget):
         # 顶部有 GPU 条 + 系统栏，详情页与侧栏各自可滚动，
         # 因此最小尺寸可以下调，覆盖「矮宽 / 窄高」极端场景。
         self.setMinimumSize(780, 520)
-        self.resize(1160, 840)
+        self._apply_default_geometry()
         if not shot_mode:
             self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
             # 半透明分层窗口：外圈 20px 边距真正透明，四周圆角由 RootFrame 画出。
@@ -1203,7 +1394,7 @@ class MainWindow(QWidget):
         self.btn_repo.clicked.connect(self.open_repo_page)
         foot.addWidget(self.btn_repo, 0, Qt.AlignVCenter)
 
-        hint = QLabel(tr('{0} · 仅供单机 / 非反作弊线上环境使用').format(core.MOD_NAME))
+        hint = QLabel(tr('{0} · 部署前请先完全退出游戏').format(core.MOD_NAME))
         hint.setStyleSheet(f"font-size:11px; color:{C['dim']};")
         foot.addWidget(hint)
         grip = QSizeGrip(self.root)
@@ -1220,34 +1411,43 @@ class MainWindow(QWidget):
 
         self._init_ready = False
         self._splash_elapsed = False
+        self._boot_worker = None
         self._boot()
         if not shot_mode:
             # 先让主窗口完成一次完整布局与首次绘制，再挂 splash 盖上去，
             # 避免「底下还没画好就被遮住 → 移开 splash 后一片空白」。
             QTimer.singleShot(0, self._mount_splash)
-        else:
-            QTimer.singleShot(150, self.start_scan)
 
     def _boot(self) -> None:
-        """真实初始化：显卡探测、运行包校验。供载入动画期间完成。"""
+        """把显卡探测和完整性校验移出 UI 线程，避免拖住启动动画。"""
         self._log(tr('欢迎使用，点击“扫描游戏”开始识别本机已安装的游戏。'))
-        self._log(tr('显卡：{0}（驱动 {1}）→ 路由 {2}').format(self.gpu.name, self.gpu.driver or '未知', self.gpu.route))
-        if self.gpu.vram_mb:
-            self._log(tr('显存：{0} MiB。开启帧生成会额外占用显存，请留出余量。').format(self.gpu.vram_mb))
-        pd = core.payload_dir()
-        if pd is None:
+        self._boot_worker = BootWorker()
+        self._boot_worker.done.connect(self._on_boot_ready)
+        self._boot_worker.start()
+
+    def _on_boot_ready(self, gpu: core.GpuInfo, warns: list, error: str) -> None:
+        self.gpu = gpu
+        self.gpu_name.setText(tr(gpu.name))
+        self.gpu_sub.setText(tr('驱动 {0}').format(gpu.driver or '未知')
+                             + (tr(' · 显存 {0} MiB').format(gpu.vram_mb) if gpu.vram_mb else ""))
+        self.gpu_pill.set_kind(tr('路由 {0}').format(gpu.route), "info" if gpu.supported else "warn")
+        self._log(tr('显卡：{0}（驱动 {1}）→ 路由 {2}').format(gpu.name, gpu.driver or '未知', gpu.route))
+        if gpu.vram_mb:
+            self._log(tr('显存：{0} MiB。开启帧生成会额外占用显存，请留出余量。').format(gpu.vram_mb))
+        if error == "missing_payload":
             self._log(tr('[错误] 未找到 payload 目录，请把 payload 文件夹放在程序同级目录后重启'))
             self.toast_msg(tr('缺少 payload 运行包文件夹'), "bad")
+        elif error:
+            self._log(tr('[警告] 启动校验未完成：{0}').format(error))
+        elif warns:
+            self._log(tr('[警告] 运行包校验异常 {0} 项：{1}').format(len(warns), tr('；').join(warns)))
         else:
-            warns = core.verify_payload()
-            if warns:
-                self._log(tr('[警告] 运行包校验异常 {0} 项：{1}').format(len(warns), tr('；').join(warns)))
-            else:
-                self._log(tr('[提示] 运行包校验通过（{0}）').format(pd))
-        core.detect_hags(force=True)
+            self._log(tr('[提示] 运行包校验通过（{0}）').format(core.payload_dir()))
         self._init_ready = True
-        # 静默更新检查：延迟到界面起来之后再排队，避免拖慢启动
         self._start_auto_update_check()
+        if self.shot_mode:
+            QTimer.singleShot(0, self.start_scan)
+        self._try_end_splash()
 
     def _start_auto_update_check(self) -> None:
         """在启动扫描之后排队做一次静默更新检查（不阻塞界面）。"""
@@ -1350,6 +1550,22 @@ class MainWindow(QWidget):
         super().resizeEvent(e)
         self._place_splash()
 
+    def _apply_default_geometry(self) -> None:
+        """Pick a roomy default size that still fits the usable screen.
+
+        Coordinates are device-independent, and QT_SCALE_FACTOR (the persisted
+        UI scale) shrinks the reported available geometry, so clamping here
+        keeps the whole window — including the footer — on screen on any DPI or
+        zoom level instead of letting the bottom drop below the taskbar.
+        """
+        screen = QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+        pref_w, pref_h = 1280, 900
+        w = min(pref_w, max(780, avail.width() - 96))
+        h = min(pref_h, max(520, avail.height() - 88))
+        self.setGeometry(avail.x() + (avail.width() - w) // 2,
+                         avail.y() + (avail.height() - h) // 2, w, h)
+
     # ------------------------------------------------- 顶栏
 
     def _on_lang_changed(self, idx: int) -> None:
@@ -1365,6 +1581,21 @@ class MainWindow(QWidget):
             pass
         self.toast_msg(tr('语言已切换为 {0}，重启程序后生效').format(
             self.lang_sel.itemText(idx)), "info")
+
+    def _on_scale_changed(self, idx: int) -> None:
+        """Persist the UI scale; it is applied on the next launch."""
+        try:
+            value = float(self.scale_sel.itemData(idx))
+        except (TypeError, ValueError):
+            return
+        try:
+            st = core.load_state()
+            st.setdefault("settings", {})["ui_scale"] = value
+            core.save_state(st)
+        except Exception:
+            pass
+        self.toast_msg(tr('界面缩放已设为 {0}，重启程序后生效').format(
+            f"{int(round(value * 100))}%"), "info")
 
     def _build_titlebar(self) -> QWidget:
         bar = QWidget()
@@ -1417,6 +1648,22 @@ class MainWindow(QWidget):
         self.lang_sel.setToolTip(tr('界面语言（切换后重启程序生效）'))
         self.lang_sel.currentIndexChanged.connect(self._on_lang_changed)
         lay.addWidget(self.lang_sel, 0, Qt.AlignVCenter)
+
+        # 界面缩放：整体缩放（字体 / 间距 / 图标一起），用户自己选，重启生效。
+        self.scale_sel = Combo()
+        self.scale_sel.setObjectName("langSel")
+        self.scale_sel.setCursor(Qt.PointingHandCursor)
+        for _value in core.UI_SCALES:
+            self.scale_sel.addItem(
+                tr('缩放') + f" {int(round(_value * 100))}%", _value)
+        _cur_scale = core.saved_ui_scale()
+        for _i in range(self.scale_sel.count()):
+            if abs(float(self.scale_sel.itemData(_i)) - _cur_scale) < 0.001:
+                self.scale_sel.setCurrentIndex(_i)
+                break
+        self.scale_sel.setToolTip(tr('界面缩放，修改后重启生效'))
+        self.scale_sel.currentIndexChanged.connect(self._on_scale_changed)
+        lay.addWidget(self.scale_sel, 0, Qt.AlignVCenter)
 
         # 右侧状态点：显示是否已开启 HAGS，呼应左侧系统准备卡片
         self.tb_hags = Pill(tr('HAGS 检测中'), "muted")
@@ -1530,13 +1777,13 @@ class MainWindow(QWidget):
 
         col = QVBoxLayout()
         col.setSpacing(2)
-        name = QLabel(tr(self.gpu.name))  # 未检测到时是中文兜底名
-        name.setObjectName("gpuName")
-        sub = QLabel(tr('驱动 {0}').format(self.gpu.driver or '未知')
-                     + (tr(' · 显存 {0} MiB').format(self.gpu.vram_mb) if self.gpu.vram_mb else ""))
-        sub.setObjectName("gpuSub")
-        col.addWidget(name)
-        col.addWidget(sub)
+        self.gpu_name = QLabel(tr(self.gpu.name))  # 启动探测完成后更新
+        self.gpu_name.setObjectName("gpuName")
+        self.gpu_sub = QLabel(tr('驱动 {0}').format(self.gpu.driver or '未知')
+                              + (tr(' · 显存 {0} MiB').format(self.gpu.vram_mb) if self.gpu.vram_mb else ""))
+        self.gpu_sub.setObjectName("gpuSub")
+        col.addWidget(self.gpu_name)
+        col.addWidget(self.gpu_sub)
         lay.addLayout(col, 1)
 
         self.gpu_pill = Pill(tr('路由 {0}').format(self.gpu.route), "info" if self.gpu.supported else "warn")
@@ -1544,7 +1791,8 @@ class MainWindow(QWidget):
         # 版本号走占位符 + core.MOD_VERSION，不在词典里硬编码 ——
         # 否则每次同步上游都要同时改 i18n 键，漏改就会让英文/繁中界面
         # 回退成中文（v1.7.3 → v1.7.4 就漏过一次，键还停在 0.3.2）。
-        lay.addWidget(Pill(tr('SM86 / SM75 内核 · {0}').format(core.MOD_VERSION), "purple"))
+        self.kernel_pill = Pill(tr('SM86 / SM75 内核 · {0}').format(core.MOD_VERSION), "purple")
+        lay.addWidget(self.kernel_pill)
         return w
 
     # ------------------------------------------------- 左侧列表
@@ -1593,11 +1841,21 @@ class MainWindow(QWidget):
         self.list_area.setWidget(holder)
         lay.addWidget(self.list_area, 1)
 
+        add_row = QHBoxLayout()
+        add_row.setSpacing(8)
         self.btn_add = QPushButton(tr('手动添加游戏目录…'))
         self.btn_add.setObjectName("ghost")
         self.btn_add.setCursor(Qt.PointingHandCursor)
         self.btn_add.clicked.connect(self.add_root)
-        lay.addWidget(self.btn_add)
+        add_row.addWidget(self.btn_add, 1)
+
+        self.btn_restore_ignored = QPushButton(tr('恢复移除项'))
+        self.btn_restore_ignored.setObjectName("ghost")
+        self.btn_restore_ignored.setCursor(Qt.PointingHandCursor)
+        self.btn_restore_ignored.setToolTip(tr('查看并恢复从扫描列表移除的游戏'))
+        self.btn_restore_ignored.clicked.connect(self.restore_ignored_game)
+        add_row.addWidget(self.btn_restore_ignored)
+        lay.addLayout(add_row)
         return side
 
     def _deep_menu(self) -> None:
@@ -1773,7 +2031,6 @@ class MainWindow(QWidget):
 
     def _build_hags_card(self) -> QWidget:
         """系统准备卡片（横向紧凑）。"""
-        self.hags_info = core.detect_hags(force=True)
         card = QFrame()
         card.setObjectName("hagsCard")
         lay = QHBoxLayout(card)
@@ -2072,10 +2329,10 @@ class MainWindow(QWidget):
         t1.setObjectName("cardTitle")
         cl.addWidget(t1)
 
-        # 配置行 1：运行库 + 入口 DLL。用 FlowRow 而非 QHBoxLayout，
+        # 配置行 1：配套运行库 + 入口 DLL。用 FlowRow 而非 QHBoxLayout，
         # 窄宽时自动换行；下拉不再写死宽度，改为可伸缩（150~280）。
         r1 = FlowRow(h_spacing=10, v_spacing=6)
-        a = QLabel(tr('运行库'))
+        a = QLabel(tr('配套运行库'))
         a.setObjectName("kv")
         a.setMinimumWidth(max(66, a.sizeHint().width()))
         r1.add(a)
@@ -2085,8 +2342,7 @@ class MainWindow(QWidget):
         self.cmb_runtime.setMinimumWidth(150)
         self.cmb_runtime.setMaximumWidth(280)
         self.cmb_runtime.setToolTip(
-            tr('310.9 为最新运行库，支持 6X；310.1 为老版本，上限 4X。'
-               '两套内嵌运行库与上游发布结构一致，可任选其一。'))
+            tr('上游 0.4.1 使用 310.9.16 配套运行库；新版不再提供 310.1。'))
         self.cmb_runtime.currentIndexChanged.connect(lambda _i: self._on_runtime_changed())
         r1.add(self.cmb_runtime)
         b = QLabel(tr('入口 DLL'))
@@ -2100,13 +2356,26 @@ class MainWindow(QWidget):
         r1.add(self.cmb_entry)
         cl.addWidget(r1)
 
-        # 配置行 2：插帧倍率 + 诊断日志。同样走 FlowRow，窄宽自动换行。
+        # 配置行 2：插帧引擎、倍率和诊断日志。
         r2 = FlowRow(h_spacing=10, v_spacing=6)
+        e = QLabel(tr('帧生成引擎'))
+        e.setObjectName("kv")
+        e.setMinimumWidth(max(66, e.sizeHint().width()))
+        r2.add(e)
+        self.cmb_engine = Combo()
+        self.cmb_engine.addItem(tr('NVIDIA DLSS-G'), "DLSS")
+        self.cmb_engine.addItem(tr('Intel XeSS-FG（实验性）'), "XeSS")
+        self.cmb_engine.setMinimumWidth(170)
+        self.cmb_engine.setMaximumWidth(280)
+        self.cmb_engine.setToolTip(
+            tr('DLSS-G 是默认引擎；XeSS-FG 提供 2X–4X 插帧，兼容性与性能因游戏而异。'))
+        self.cmb_engine.currentIndexChanged.connect(lambda _i: self._on_engine_changed())
+        r2.add(self.cmb_engine)
         c = QLabel(tr('插帧倍率'))
         c.setObjectName("kv")
         c.setMinimumWidth(max(66, c.sizeHint().width()))
         r2.add(c)
-        self.seg_mult = Segmented(["2X", "3X", "4X", "5X", "6X"], 0)
+        self.seg_mult = Segmented(["2X", "3X", "4X", "5X", "6X"], 2)
         self._refresh_mult_seg()
         self.seg_mult.changed.connect(lambda _i: self._update_vram())
         r2.add(self.seg_mult)
@@ -2117,6 +2386,60 @@ class MainWindow(QWidget):
         self.sw_log = Switch(False)
         r2.add(self.sw_log)
         cl.addWidget(r2)
+
+        r_engine = FlowRow(h_spacing=10, v_spacing=6)
+        preset_label = QLabel(tr('DLSS-G预设'))
+        preset_label.setObjectName("kv")
+        preset_label.setToolTip(tr('预设只影响 NVIDIA DLSS-G 插帧引擎。'))
+        r_engine.add(preset_label)
+        self.cmb_preset = HelpCombo(popup_width=420)
+        preset_help = {
+            "A": '预设 A：标准生成路径，关闭 UI 重组与 FG Lite；默认选项。',
+            "B": '预设 B：尝试单独处理 HUD/UI 平面，以减少静止界面拖影；需要游戏提供 HUD-less 与 UI 两张平面，很多游戏不提供时效果与 A 相同。',
+            "C": '预设 C（FG Lite）：轻量候选混合，可减少计算；可能更快但画质略降，HUD 与遮挡边缘更明显，效果依游戏而异。',
+        }
+        self._preset_help = preset_help
+        for value, help_text in preset_help.items():
+            index = self.cmb_preset.count()
+            self.cmb_preset.addItem(value, value)
+            self.cmb_preset.setItemData(index, tr(help_text), Qt.ToolTipRole)
+        self.cmb_preset.set_help({value: tr(text) for value, text in preset_help.items()},
+                                 popup_width=460)
+        self.cmb_preset.setMinimumWidth(100)
+        self.cmb_preset.currentIndexChanged.connect(lambda _i: self._update_option_tooltips())
+        r_engine.add(self.cmb_preset)
+        sr_label = QLabel(tr('DLSS超分'))
+        sr_label.setObjectName("kv")
+        sr_label.setToolTip(tr('仅 RTX 20 / 30 系可用；建议先用 Off，其他模式适合对比测试。'))
+        r_engine.add(sr_label)
+        self.cmb_sr = HelpCombo(popup_width=460)
+        sr_help = {
+            "Off": '超分 Off：不介入超分，使用游戏自带的 DLSS 模型与内核。',
+            "M-INT8": 'M-INT8：固定超分预设 M 并用 INT8 内核；性能/超级性能档可能更快，高画质档可能反而更慢。结果随显卡和游戏而异。',
+            "L-INT8": 'L-INT8：固定预设 L 并用 INT8 内核；性能档通常快于同档 FP16，画质与 FP16 差异很小；高画质档可能更慢。',
+            "M-FP16": 'M-FP16：固定预设 M，使用 NVIDIA FP16 内核，作为 M-INT8 的对照；高画质档可能比游戏默认更慢。',
+            "L-FP16": 'L-FP16：固定预设 L，使用 NVIDIA FP16 内核，作为 L-INT8 的对照；高画质档可能比游戏默认更慢。',
+        }
+        self._sr_help = sr_help
+        for value, help_text in sr_help.items():
+            index = self.cmb_sr.count()
+            self.cmb_sr.addItem(value, value)
+            self.cmb_sr.setItemData(index, tr(help_text), Qt.ToolTipRole)
+        self.cmb_sr.set_help({value: tr(text) for value, text in sr_help.items()},
+                             popup_width=460)
+        self.cmb_sr.setMinimumWidth(135)
+        self.cmb_sr.setMaximumWidth(220)
+        self.cmb_sr.currentIndexChanged.connect(lambda _i: self._update_option_tooltips())
+        r_engine.add(self.cmb_sr)
+        cl.addWidget(r_engine)
+        # 预设 / 超分的解释直接印在行下方，选中即更新。
+        # 悬停 tooltip（setItemData(Qt.ToolTipRole)）在部分环境下只对下拉项生效、
+        # 需要停留数百毫秒才出现，用户反馈「预设里看不到解释」，所以常驻文字才是主入口。
+        self.lb_option_hint = QLabel("")
+        self.lb_option_hint.setObjectName("optionHint")
+        self.lb_option_hint.setWordWrap(True)
+        cl.addWidget(self.lb_option_hint)
+        self._update_option_tooltips()
 
         # 配置行 3：一致性档位（上游 0.3.2 起的 [FrameGeneration] Optimized 0–3）。
         # 判据只有一条：允许生成的画面偏离官方运行库多远。档位越高越快。
@@ -2172,7 +2495,7 @@ class MainWindow(QWidget):
         lay.addWidget(actions)
 
         self.hint = QLabel(
-            tr('操作前请完全退出游戏。启用后重启游戏，在画面设置里打开帧生成并选择倍率；带反作弊的游戏请只在单机 / 离线模式下使用。恢复会清掉本工具写入的文件并还原备份。'))
+            tr('操作前请完全退出游戏。启用后重启游戏，在画面设置里打开帧生成并选择倍率。恢复会清掉本工具写入的文件并还原备份。'))
         self.hint.setWordWrap(True)
         self.hint.setStyleSheet(f"font-size:11px; color:{C['dim']}; line-height:150%;")
         lay.addWidget(self.hint)
@@ -2180,6 +2503,22 @@ class MainWindow(QWidget):
         lay.addStretch(1)
         scroll.setWidget(page)
         return scroll
+
+    def _update_option_tooltips(self) -> None:
+        """Refresh the preset / super-resolution explanation (tooltips + inline label)."""
+        preset_text = ""
+        sr_text = ""
+        if hasattr(self, "cmb_preset"):
+            value = str(self.cmb_preset.currentData() or "A")
+            preset_text = tr(self._preset_help.get(value, self._preset_help["A"]))
+            self.cmb_preset.setToolTip(preset_text)
+        if hasattr(self, "cmb_sr"):
+            value = str(self.cmb_sr.currentData() or "Off")
+            sr_text = tr(self._sr_help.get(value, self._sr_help["Off"]))
+            self.cmb_sr.setToolTip(sr_text)
+        if hasattr(self, "lb_option_hint"):
+            lines = [t for t in (preset_text, sr_text) if t]
+            self.lb_option_hint.setText("\n".join(lines))
 
     # ------------------------------------------------- 日志 / 提示
 
@@ -2219,21 +2558,26 @@ class MainWindow(QWidget):
 
     # ------------------------------------------------- 扫描
 
-    def start_scan(self, deep: bool = False, roots: list[str] | None = None) -> None:
+    def start_scan(self, deep: bool = False, roots: list[str] | None = None,
+                   extra: list[tuple[str, str, str]] | None = None) -> None:
         if self.worker and self.worker.isRunning():
             return
+        self._scan_started_at = time.monotonic()
         self.btn_scan.setEnabled(False)
         self.btn_deep.setEnabled(False)
+        self.btn_restore_ignored.setEnabled(False)
         self.status.setText(tr('正在扫描…'))
         self.count.setText(tr('扫描中…'))
-        self.worker = ScanWorker(deep, roots or [])
+        self.worker = ScanWorker(deep, roots or [], extra or [])
         self.worker.progress.connect(self.status.setText)
         self.worker.done.connect(self.on_scan_done)
         self.worker.start()
 
     def on_scan_done(self, games: list, warns: list, err: str) -> None:
+        elapsed = max(0.0, time.monotonic() - getattr(self, "_scan_started_at", time.monotonic()))
         self.btn_scan.setEnabled(True)
         self.btn_deep.setEnabled(True)
+        self.btn_restore_ignored.setEnabled(True)
         if err:
             self._log(tr('[错误] 扫描失败：{0}').format(err))
             self.status.setText(tr('扫描失败'))
@@ -2241,16 +2585,29 @@ class MainWindow(QWidget):
             return
         for w in warns:
             self._log(tr('[警告] 运行包校验：{0}').format(w))
-        self.games = games
+        # A user may hide an item while a scan is in flight; re-read the latest
+        # ignore rules here so that this scan cannot put it back into the list.
+        self.games = core.filter_ignored_games(games, core.load_state())
+        if self.current and not any(g.gid == self.current.gid for g in self.games):
+            self.current = None
         self._rebuild_list()
-        n_ok = sum(1 for g in games if g.dlssg)
-        n_on = sum(1 for g in games if g.deployed)
-        self.count.setText(tr('识别到 {0} 个游戏 · {1} 个支持帧生成 · 已启用 {2}').format(len(games), n_ok, n_on))
-        self.status.setText(tr('就绪'))
-        self._log(tr('[完成] 扫描结束：共 {0} 个游戏，其中 {1} 个检测到 DLSSG 运行库').format(len(games), n_ok))
-        if games and self.current is None:
-            self.select(games[0].gid)
+        self._update_game_count()
+        self.status.setText(tr('就绪（扫描 {0:.1f}s）').format(elapsed))
+        self._log(tr('[完成] 扫描结束：共 {0} 个游戏，其中 {1} 个检测到 DLSSG 运行库，用时 {2:.1f}s').format(
+            len(self.games), sum(1 for g in self.games if g.dlssg), elapsed))
+        if self.current:
+            self.select(self.current.gid)
+        elif self.games:
+            self.select(self.games[0].gid)
+        else:
+            self.stack.setCurrentIndex(0)
         self._repaint_all()
+
+    def _update_game_count(self) -> None:
+        n_ok = sum(1 for g in self.games if g.dlssg)
+        n_on = sum(1 for g in self.games if g.deployed)
+        self.count.setText(tr('识别到 {0} 个游戏 · {1} 个支持帧生成 · 已启用 {2}').format(
+            len(self.games), n_ok, n_on))
 
     def _rebuild_list(self) -> None:
         while self.list_lay.count() > 1:
@@ -2262,6 +2619,7 @@ class MainWindow(QWidget):
         for g in self.games:
             card = GameCard(g)
             card.clicked.connect(self.select)
+            card.removeRequested.connect(self.remove_scanned_game)
             self.cards[g.gid] = card
             self.list_lay.insertWidget(self.list_lay.count() - 1, card)
         self._filter(self.search.text())
@@ -2276,6 +2634,79 @@ class MainWindow(QWidget):
                 continue
             hit = (not q) or q in g.name.lower() or q in (g.install_dir or "").lower()
             card.setVisible(hit)
+
+    def remove_scanned_game(self, gid: str) -> None:
+        game = next((g for g in self.games if g.gid == gid), None)
+        if game is None:
+            return
+        if game.deployed:
+            QMessageBox.information(
+                self, tr('请先恢复部署'),
+                tr('此游戏有本工具部署状态。请先选择它并点“一键恢复”，再从扫描列表移除。'))
+            return
+        answer = QMessageBox.question(
+            self, tr('从扫描列表移除'),
+            tr('要从扫描结果中移除“{0}”吗？\n\n只会忽略此游戏目录，不会删除游戏文件、配置或其他数据。可通过“恢复移除项”重新加入。')
+            .format(game.name),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        state = core.load_state()
+        core.ignore_game(state, game)
+        try:
+            core.save_state(state)
+        except Exception as exc:
+            self.toast_msg(tr('无法保存移除记录：{0}').format(exc), "bad")
+            return
+
+        was_current = bool(self.current and self.current.gid == gid)
+        self.games = core.filter_ignored_games(self.games, state)
+        if was_current:
+            self.current = None
+        self._rebuild_list()
+        self._update_game_count()
+        if self.current:
+            self.select(self.current.gid)
+        elif self.games:
+            self.select(self.games[0].gid)
+        else:
+            self.stack.setCurrentIndex(0)
+        self._log(tr('[提示] 已从扫描列表移除：{0}（游戏文件未删除）').format(game.name))
+        self.toast_msg(tr('已移除扫描项；游戏文件没有删除'), "ok")
+
+    def restore_ignored_game(self) -> None:
+        state = core.load_state()
+        records = core.ignored_game_records(state)
+        if not records:
+            self.toast_msg(tr('没有已移除的扫描项'), "info")
+            return
+        menu = QMenu(self)
+        for record in records:
+            gid = str(record.get("gid", ""))
+            name = str(record.get("name") or record.get("install_dir") or tr('未知游戏'))
+            path = str(record.get("install_dir") or record.get("exe_dir") or "")
+            action = menu.addAction(f"{name}  —  {mid(path, 54)}" if path else name)
+            action.setData(gid)
+            action.setToolTip(path)
+        chosen = menu.exec(QCursor.pos())
+        if not chosen:
+            return
+        state = core.load_state()
+        record = core.unignore_game(state, str(chosen.data() or ""))
+        if record is None:
+            return
+        try:
+            core.save_state(state)
+        except Exception as exc:
+            self.toast_msg(tr('无法保存恢复记录：{0}').format(exc), "bad")
+            return
+        name = str(record.get("name") or tr('未知游戏'))
+        path = str(record.get("install_dir") or record.get("exe_dir") or "")
+        source = str(record.get("source") or tr('手动添加'))
+        self._log(tr('[提示] 已恢复扫描项：{0}').format(name))
+        self.start_scan(False, extra=[(name, path, source)] if path else None)
 
     def add_root(self) -> None:
         d = QFileDialog.getExistingDirectory(self, tr('选择游戏目录（可多选后在列表里搜索）'),
@@ -2321,6 +2752,16 @@ class MainWindow(QWidget):
         w, h = g.resolution
         self.kv_res.set(f"{w}×{h}" if w else tr('未检测到'))
         self.kv_ac.set(tr('已检测到') if g.anticheat else tr('未检测到'))
+        cfg = g.config or {}
+        if g.deployed:
+            for widget, key, fallback in (
+                (self.cmb_engine, "Engine", "DLSS"),
+                (self.cmb_preset, "Preset", "A"),
+                (self.cmb_sr, "SRMode", "Off"),
+            ):
+                idx = widget.findData(cfg.get(key, fallback))
+                widget.setCurrentIndex(max(0, idx))
+            self._on_engine_changed()
         mult = self._mult()
         res = core.vram_hint(w, h, mult) if w else None
         if res and res[0]:
@@ -2328,7 +2769,6 @@ class MainWindow(QWidget):
         else:
             self.kv_vram.set(tr('按最终输出分辨率预留 300–800 MiB'))
         if g.deployed:
-            cfg = g.config or {}
             if cfg:
                 self.kv_state.set(tr('已部署 {0}（Router={1}）').format(g.entry, cfg.get('Router', '?')))
             else:
@@ -2357,9 +2797,18 @@ class MainWindow(QWidget):
     # ------------------------------------------------- 操作
 
     def _runtime(self) -> str:
-        """当前选中的内嵌运行库版本（310.9 / 310.1）。"""
+        """当前上游配套运行库版本。"""
         rt = self.cmb_runtime.currentData() if hasattr(self, "cmb_runtime") else ""
         return rt or core.DEFAULT_RUNTIME
+
+    def _engine(self) -> str:
+        return (self.cmb_engine.currentData() or "DLSS") if hasattr(self, "cmb_engine") else "DLSS"
+
+    def _preset(self) -> str:
+        return (self.cmb_preset.currentData() or "A") if hasattr(self, "cmb_preset") else "A"
+
+    def _sr_mode(self) -> str:
+        return (self.cmb_sr.currentData() or "Off") if hasattr(self, "cmb_sr") else "Off"
 
     def _fill_entry_combo(self) -> None:
         """入口下拉：按上游分层显示 —— 工具类优先，渲染路径单独标注。"""
@@ -2375,24 +2824,20 @@ class MainWindow(QWidget):
         self.cmb_entry.setCurrentIndex(max(0, idx))
 
     def _on_runtime_changed(self) -> None:
-        """切换运行库：重建倍率档位（310.1 上限 4X）并刷新显存估算。
-
-        0.3.2 起还需刷新档位段：310.1 构建没有有损图像内核，
-        其档位上限只有 1，因此 2/3 档在该运行库下必须置灰。
-        """
+        """运行库更新后刷新倍率和一致性档位。"""
         self._refresh_mult_seg()
         self._refresh_tier_seg()
         self._update_vram()
 
-    def _refresh_mult_seg(self) -> None:
-        """按当前运行库的倍率上限重建倍率段。
+    def _on_engine_changed(self) -> None:
+        if hasattr(self, "cmb_preset"):
+            self.cmb_preset.setEnabled(self._engine().upper() == "DLSS")
+        self._refresh_mult_seg()
+        self._update_vram()
 
-        默认选中 4X：上游 0.3.1 把出厂 MaxGeneratedFrames 由 5 改为 3（4X），
-        理由是自带 Dynamic MFG 的游戏会默认跑到上限、6X 对多数人偏高
-        （上游 issue #497/#499）。上游 0.3.2 沿用该出厂值，本工具随之对齐。
-        切换运行库导致上限变化时，保留用户已选倍率，越界才钳到上限。
-        """
-        cap = core.runtime_mult_cap(self._runtime())
+    def _refresh_mult_seg(self) -> None:
+        """按当前引擎的上限重建倍率段，XeSS-FG 最高 4X。"""
+        cap = core.runtime_mult_cap(self._runtime(), self._engine())
         labels = [f"{m}X" for m in range(2, cap + 1)]
         if hasattr(self, "seg_mult") and self.seg_mult.group.buttons():
             want = self._mult()               # 保留当前选择
@@ -2407,7 +2852,7 @@ class MainWindow(QWidget):
     # ------------------------------------------------- 一致性档位（0.3.2）
 
     def _tier_cap(self) -> int:
-        """当前运行库实际支持的档位上限（310.1 为 1）。"""
+        """当前上游运行库支持的档位上限。"""
         return core.tier_cap(self._runtime())
 
     def _tier(self) -> int:
@@ -2415,12 +2860,7 @@ class MainWindow(QWidget):
         return int(self.seg_tier.value()) if hasattr(self, "seg_tier") else core.DEFAULT_TIER
 
     def _refresh_tier_seg(self) -> None:
-        """按运行库能力重建档位段，并同步下方说明文字。
-
-        档位 2/3 依赖 310.9 构建里新增的有损图像内核；310.1 上上游会
-        静默把它们当 1 处理，所以这里直接不给出这两个选项，避免用户
-        选了一个实际不生效的档位。
-        """
+        """按运行库能力重建档位段，并同步下方说明文字。"""
         if not hasattr(self, "seg_tier"):
             return
         cap = self._tier_cap()
@@ -2446,8 +2886,6 @@ class MainWindow(QWidget):
         text = tr(core.tier_label(t))
         if t >= 2:
             text += tr('，不再是逐位一致')
-        if cap == 1:
-            text += tr('；310.1 无有损内核，仅支持档位 0–1')
         self.lb_tier.setText(text)
 
     def _update_vram(self) -> None:
@@ -2471,14 +2909,17 @@ class MainWindow(QWidget):
         if not g:
             return
         if g.anticheat:
-            self._log(tr('[警告] 检测到反作弊，线上模式可能被视为违规，请只在单机 / 离线环境使用'))
+            # 只做信息提示：是否联机使用由用户自己决定，这里不做任何拦截。
+            self._log(tr('[提示] 检测到反作弊组件（仅提示，不影响部署；是否联机使用由你自行判断）'))
         if not g.dlssg:
             self._log(tr('[警告] 该游戏未检测到 nvngx_dlssg.dll，可能不支持帧生成；若游戏内置 DLSSG 能力仍可尝试'))
         self.btn_install.setEnabled(False)
         self.status.setText(tr('正在部署…'))
         self.kw = ActionWorker(core.deploy, g, "SM86", self._mult(),
                                False, 2 if self.sw_log.isChecked() else 1,
-                               self._entry(), False, self._runtime(), self._tier())
+                               self._entry(), False, self._runtime(), self._tier(),
+                               engine=self._engine(), preset=self._preset(),
+                               sr_mode=self._sr_mode())
         self.kw.done.connect(self._on_install_done)
         self.kw.start()
 
@@ -2685,6 +3126,14 @@ def export_icon_ico(path: str) -> str:
 
 
 def run(shot: str = "", shot_delay: int = 9000) -> int:
+    # QT_SCALE_FACTOR 必须在创建 QApplication 之前设置；它会把字体、间距和
+    # 图标作为一个整体缩放，比只调大字号更不容易错位。
+    try:
+        _ui_scale = core.saved_ui_scale()
+    except Exception:
+        _ui_scale = core.UI_SCALE_DEFAULT
+    if abs(_ui_scale - 1.0) > 0.001:
+        os.environ.setdefault("QT_SCALE_FACTOR", f"{_ui_scale:g}")
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)

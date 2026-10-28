@@ -14,9 +14,11 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
@@ -27,27 +29,36 @@ except ImportError:  # 非 Windows 平台的占位，实际逻辑不会走到
 
 import i18n
 from i18n import tr  # 多语言：中文字面量为源键，详见 i18n.py
+from upstream_payload import (
+    PAYLOAD_FILES_SHA256,
+    UPSTREAM_ARCHIVE_SHA256,
+    UPSTREAM_VERSION,
+)
 
 APP_NAME = "DLSSG Manager"
-APP_VERSION = "1.7.5"
+APP_VERSION = "1.9.3"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
+
+# 界面缩放：由用户在标题栏选择，持久化到 state.json，启动时通过
+# QT_SCALE_FACTOR 整体缩放（含字体、间距与图标），避免只放大字号导致错位。
+UI_SCALES = (1.0, 1.1, 1.25, 1.5)
+UI_SCALE_DEFAULT = 1.0
+UI_SCALE_MIN = 0.8
+UI_SCALE_MAX = 2.0
 
 # 内嵌的上游 Mod 版本 —— 全项目只在这里声明一次。
 # MOD_NAME 供界面/日志显示，PAYLOAD_SHA256 由它索引到对应版本的哈希表。
-MOD_VERSION = "0.3.5"
+MOD_VERSION = UPSTREAM_VERSION
 MOD_NAME = f"DLSSG SM86 {MOD_VERSION}"
 
 INI_NAME = "dlssg_sm86.ini"
 LOG_DIR_NAME = "dlssg_sm86"
 
-# 内嵌运行库版本（照搬上游两个发布包）：
-#   root    = 发布根目录，nvngx_dlssg 310.9，帧倍率上限 6X
-#   310.1   = 310.1/ 子目录，老版本运行库，帧倍率上限 4X
+# 上游 0.4.x 采用一个独立运行包目录，310.9.16 随包放在 dlssg_sm86/runtime。
 RUNTIMES = [
-    ("310.9", "", "310.9 运行库（最新，支持 6X）"),
-    ("310.1", "310.1/", "310.1 运行库（老版本，上限 4X）"),
+    ("310.9.16", "", "310.9.16 运行库（上游 0.4.1）"),
 ]
-DEFAULT_RUNTIME = "310.9"
+DEFAULT_RUNTIME = "310.9.16"
 
 # 入口 DLL：(内部键, 部署文件名, 包内相对路径, 说明, 分组)
 # 分组照上游 alternatives/README.md：
@@ -178,21 +189,22 @@ PAYLOAD_SHA256_BY_VERSION: dict[str, dict[str, str]] = {
 }
 
 # 保留原名给现有调用方（verify_payload / 校验脚本）用。
+PAYLOAD_SHA256_BY_VERSION[UPSTREAM_VERSION] = dict(PAYLOAD_FILES_SHA256)
 PAYLOAD_SHA256 = PAYLOAD_SHA256_BY_VERSION[MOD_VERSION]
 
 
 
 def runtime_prefix(rt: str) -> str:
-    """运行库版本 -> 包内路径前缀（310.9 为根目录，310.1 为 310.1/）。"""
+    """上游 0.4.1 的运行库随 dlssg_sm86/ 一起部署，不按版本切目录。"""
     for key, prefix, _desc in RUNTIMES:
         if key == rt:
             return prefix
     return ""
 
 
-def runtime_mult_cap(rt: str) -> int:
-    """运行库支持的帧倍率上限：310.9 = 6，310.1 = 4。"""
-    return 4 if rt == "310.1" else 6
+def runtime_mult_cap(rt: str = DEFAULT_RUNTIME, engine: str = "DLSS") -> int:
+    """上游 DLSS 最高 6X，XeSS-FG 最高 4X。"""
+    return 4 if engine.upper() == "XESS" else 6
 
 
 # ---------------------------------------------------------------- 一致性档位
@@ -211,13 +223,8 @@ FACTORY_OPTIMIZED = 1
 
 
 def tier_cap(runtime: str) -> int:
-    """该运行库实际能生效的最高档位。
-
-    310.1 构建里没有新增的有损图像内核：文档明确写了「310.1 构建上
-    2/3 等同于 1」，所以本工具在 310.1 上直接钳到 1，避免给用户
-    一个看起来生效其实没有的档位。
-    """
-    return 1 if runtime == "310.1" else TIER_MAX
+    """上游 0.4.1 的唯一内嵌运行库支持全部四档。"""
+    return TIER_MAX
 
 
 def tier_label(tier: int) -> str:
@@ -225,7 +232,7 @@ def tier_label(tier: int) -> str:
     return {
         0: '0 原厂（最保守）',
         1: '1 逐位一致（推荐）',
-        2: '2 更快（有损，PSNR 50dB+）',
+        2: '2 更快（有损）',
         3: '3 最快（有损）',
     }.get(int(tier), '1 逐位一致（推荐）')
 
@@ -1638,20 +1645,23 @@ def deep_scan_root(root: str, budget_sec: float = 90.0,
     rp = Path(root)
     if not rp.is_dir():
         return []
-    t0 = time.time()
+    t0 = time.monotonic()
+    next_progress = t0 + 0.4
     base = len(rp.parts)
     hits: list[str] = []
     try:
         for cur, dirs, files in os.walk(rp):
-            if time.time() - t0 > budget_sec:
+            now = time.monotonic()
+            if now - t0 > budget_sec:
                 break
             depth = len(Path(cur).parts) - base
             if depth >= 7:
                 dirs[:] = []
             dirs[:] = [d for d in dirs
                        if d.lower() not in DIR_BLACKLIST and d.lower() not in SKIP_ROOTS]
-            if progress and int(time.time() - t0) % 3 == 0:
-                progress(tr('深度扫描中… {0}s').format(int(time.time() - t0)))
+            if progress and now >= next_progress:
+                progress(tr('深度扫描中… {0}s').format(int(now - t0)))
+                next_progress = now + 0.4
             low = {f.lower() for f in files}
             if "nvngx_dlssg.dll" in low or "nvngx_dlss.dll" in low:
                 hits.append(cur)
@@ -1681,18 +1691,98 @@ def load_state() -> dict:
         try:
             st = json.loads(read_text(f))
             st.setdefault("settings", {}).setdefault("auto_update_check", True)
+            st["settings"].setdefault("ui_scale", UI_SCALE_DEFAULT)
+            if not isinstance(st.get("ignored_games"), list):
+                st["ignored_games"] = []
             return st
         except Exception:
             pass
-    return {"games": {}, "roots": [],
+    return {"games": {}, "roots": [], "ignored_games": [],
             "settings": {"mult": 4, "bilinear": False, "level": 1,
-                         "auto_update_check": True}}
+                         "auto_update_check": True, "ui_scale": UI_SCALE_DEFAULT}}
+
+
+def saved_ui_scale(state: dict | None = None) -> float:
+    """Read the persisted UI scale, clamped to a sane range.
+
+    The value is applied at process start through QT_SCALE_FACTOR, so the whole
+    interface (fonts, paddings, icons) scales consistently on any DPI.
+    """
+    st = state if state is not None else load_state()
+    try:
+        value = float((st.get("settings") or {}).get("ui_scale", UI_SCALE_DEFAULT))
+    except (TypeError, ValueError):
+        return UI_SCALE_DEFAULT
+    if not (UI_SCALE_MIN <= value <= UI_SCALE_MAX):
+        return UI_SCALE_DEFAULT
+    return round(value, 3)
 
 
 def save_state(state: dict) -> None:
     tmp = state_file().with_suffix(".tmp")
     tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(state_file())
+
+
+def ignored_game_records(state: dict) -> list[dict]:
+    """Return normalized ignored-game records without mutating user state."""
+    records = state.get("ignored_games", [])
+    if not isinstance(records, list):
+        return []
+    return [record for record in records if isinstance(record, dict)
+            and (record.get("gid") or record.get("exe_dir") or record.get("install_dir"))]
+
+
+def ignore_game(state: dict, game: Game) -> dict:
+    """Hide a scanned game from future results; never removes game files."""
+    record = {
+        "gid": str(game.gid or game_key(game.exe_dir)),
+        "name": str(game.name or game.install_dir or "Game"),
+        "source": str(game.source or ""),
+        "install_dir": canon_dir(game.install_dir),
+        "exe_dir": canon_dir(game.exe_dir),
+    }
+    records = ignored_game_records(state)
+    records = [old for old in records
+               if old.get("gid") != record["gid"]
+               and norm(canon_dir(old.get("exe_dir", ""))) != norm(record["exe_dir"])]
+    records.append(record)
+    state["ignored_games"] = records
+    return record
+
+
+def unignore_game(state: dict, gid: str) -> dict | None:
+    """Remove one ignored-game rule and return its record, if found."""
+    records = ignored_game_records(state)
+    record = next((r for r in records if str(r.get("gid", "")) == str(gid)), None)
+    if record is not None:
+        state["ignored_games"] = [r for r in records if r is not record]
+    return record
+
+
+def _ignored_game_indexes(state: dict) -> tuple[set[str], set[str], set[str]]:
+    gids: set[str] = set()
+    install_dirs: set[str] = set()
+    exe_dirs: set[str] = set()
+    for record in ignored_game_records(state):
+        if record.get("gid"):
+            gids.add(str(record["gid"]))
+        for field, target in (("install_dir", install_dirs), ("exe_dir", exe_dirs)):
+            path = str(record.get(field, "") or "")
+            if path:
+                target.add(norm(canon_dir(path)))
+    return gids, install_dirs, exe_dirs
+
+
+def is_game_ignored(game: Game, state: dict) -> bool:
+    gids, install_dirs, exe_dirs = _ignored_game_indexes(state)
+    return (str(game.gid) in gids
+            or norm(canon_dir(game.install_dir)) in install_dirs
+            or norm(canon_dir(game.exe_dir)) in exe_dirs)
+
+
+def filter_ignored_games(games: list[Game], state: dict) -> list[Game]:
+    return [game for game in games if not is_game_ignored(game, state)]
 
 
 def game_key(exe_dir: str) -> str:
@@ -1702,7 +1792,14 @@ def game_key(exe_dir: str) -> str:
 def entry_of_deployment(exe_dir: str) -> tuple[str, bool]:
     """检查目录里是否已有本项目的部署。返回 (入口文件名, 是否确认属于本项目)。"""
     d = Path(exe_dir)
-    has_ini = (d / INI_NAME).is_file()
+    ini = d / INI_NAME
+    has_our_ini = False
+    try:
+        if ini.is_file():
+            head = read_text(ini)[:4096]
+            has_our_ini = APP_NAME in head and ("生成" in head or "Generated by" in head)
+    except OSError:
+        pass
     known = _all_known_hashes()
     for item in ENTRIES:
         fname = item[1]
@@ -1713,62 +1810,128 @@ def entry_of_deployment(exe_dir: str) -> tuple[str, bool]:
                     return fname, True
             except OSError:
                 pass
-    return ("", has_ini)
+    return ("", has_our_ini)
 
 
 # ---------------------------------------------------------------- 部署 / 恢复
 
+def _set_ini_value(text: str, section: str, key: str, value: str) -> str:
+    """在官方模板的指定节里替换一个键；模板不匹配时拒绝部署。"""
+    lines = text.splitlines(keepends=True)
+    current = ""
+    key_pattern = re.compile(rf"^([ \t]*{re.escape(key)}[ \t]*=[ \t]*)[^\r\n]*")
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            current = stripped[1:-1].strip()
+            continue
+        if current != section or stripped.startswith((";", "#")):
+            continue
+        match = key_pattern.match(line)
+        if match:
+            newline = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+            lines[i] = match.group(1) + value + newline
+            return "".join(lines)
+    raise ValueError(f"Upstream INI template is missing [{section}] {key}")
+
+
+def _merge_compatible_ini(template: str, previous: str) -> str:
+    """Carry forward advanced values only when the new upstream template still supports them."""
+    section = ""
+    for line in previous.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1].strip()
+            continue
+        if not stripped or stripped.startswith((";", "#")) or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key, value = key.strip(), value.strip()
+        if section and key and value:
+            try:
+                template = _set_ini_value(template, section, key, value)
+            except ValueError:
+                # Removed/renamed upstream options are deliberately dropped.
+                continue
+    return template
+
+
 def build_ini(router: str, mult: int, bilinear: bool, level: int,
-              tier: int = DEFAULT_TIER, runtime: str = "") -> str:
-    """生成 dlssg_sm86.ini（上游 0.3.4 代理模式格式）。
+              tier: int = DEFAULT_TIER, runtime: str = "",
+              engine: str = "DLSS", preset: str = "A",
+              sr_mode: str = "Off", previous: str = "") -> str:
+    """基于上游 0.4.1 完整模板生成配置，保留上游注释及安全默认项。"""
+    source = payload_dir()
+    template_path = source / INI_NAME if source else None
+    if not template_path or not template_path.is_file():
+        raise FileNotFoundError("缺少经过校验的上游 dlssg_sm86.ini 模板")
+    engine_key = engine.strip().upper()
+    if engine_key not in {"DLSS", "XESS"}:
+        raise ValueError(f"Unsupported frame-generation engine: {engine}")
+    engine = "XeSS" if engine_key == "XESS" else "DLSS"
+    preset = preset.upper()
+    if preset not in {"A", "B", "C"}:
+        raise ValueError(f"Unsupported DLSS-G preset: {preset}")
+    if sr_mode not in {"Off", "M-INT8", "L-INT8", "M-FP16", "L-FP16"}:
+        raise ValueError(f"Unsupported super-resolution mode: {sr_mode}")
+    cap = runtime_mult_cap(runtime or DEFAULT_RUNTIME, engine)
+    mult = max(2, min(cap, int(mult or 2)))
+    tier, _reason = clamp_tier(tier, runtime or DEFAULT_RUNTIME)
 
-    router / bilinear 参数保留以兼容调用方，但代理模式的 ini 不含
-    Router / KernelImage / HardwareBilinear（native 模式的键，已废弃）；
-    运行库与 SM86/SM75 后端内嵌在代理 DLL 中。
+    text = read_text(template_path)
+    if previous:
+        text = _merge_compatible_ini(text, previous)
+    text = text.replace("DLSSG SM86 - frame generation", f"DLSSG SM86 {MOD_VERSION} - frame generation", 1)
+    text = text.replace("; Copy version.dll",
+                        f"; Generated by {APP_NAME} {APP_VERSION}（由本工具生成）. Copy version.dll", 1)
+    for sec, key, val in (
+        ("General", "Enabled", "1"),
+        ("FrameGeneration", "Engine", engine),
+        ("FrameGeneration", "MaxGeneratedFrames", str(mult - 1)),
+        ("DLSSG", "Optimized", str(tier)),
+        ("DLSSG", "Preset", preset),
+        ("Logging", "Level", str(max(0, min(3, int(level))))),
+        ("SuperResolution", "Mode", sr_mode),
+    ):
+        text = _set_ini_value(text, sec, key, val)
+    return text.replace("\r\n", "\n").replace("\n", "\r\n")
 
-    tier: 一致性档位 0–3（上游 0.3.2 起的 [FrameGeneration] Optimized）。
-          值越界时按上游行为回退到档位 1。
-    mult: 期望倍率 2~6，ini 值 = mult-1（5 = 6X 上限，由运行库钳制）。
-    """
-    mult = max(2, min(6, int(mult or 2)))
-    t, clamp_reason = clamp_tier(tier, runtime or DEFAULT_RUNTIME)
-    tier_note = ""
-    if clamp_reason == "runtime_cap":
-        tier_note = ("; 注意：310.1 运行库没有有损图像内核，2/3 档等同于 1 档，"
-                     "已按 1 档写入。\r\n")
-    elif clamp_reason == "invalid":
-        tier_note = "; 注意：档位值非法，已按上游行为回退到 1 档。\r\n"
-    return (
-        f"; DLSSG SM86 0.3.4 - 由 {APP_NAME} {APP_VERSION} 生成\r\n"
-        "; 修改后需要重启游戏才会生效。\r\n"
-        "; 本文件保留上游的两个决定性开关（Optimized / MaxGeneratedFrames），\r\n"
-        "; 其余诊断与兼容项取安全默认、不在此文件中，完整清单见上游 docs/INSTALL.md。\r\n"
-        "[General]\r\n"
-        "; 1 = 启用帧生成（内嵌 Ampere 优化版 DLSS-G 运行库）；0 = 关闭（游戏自带 DLSS-G 原样加载）。\r\n"
-        "Enabled=1\r\n"
-        "\r\n[FrameGeneration]\r\n"
-        "; 一致性档位：允许生成的画面偏离官方运行库多远。数字越大越快、离官方画面越远。\r\n"
-        ";   0 = 原厂内核，不做任何加速（最保守）\r\n"
-        ";   1 = 全部逐位一致的加速（推荐，默认；画面与官方完全相同）\r\n"
-        ";   2 = 档位 1 + 有损图像内核（对官方输出 PSNR 仍在 ~50 dB 以上），仅 310.9 构建\r\n"
-        ";   3 = 全部有损加速（画质代价最大，最快）\r\n"
-        "; 档位 2/3 不再逐位一致；310.1 构建上 2/3 等同于 1。\r\n"
-        + tier_note +
-        f"Optimized={t}\r\n"
-        "; 生成帧上限：5 = 最高 6X（仅 310.9），3 = 最高 4X。实际倍率由游戏请求并钳到运行库支持范围。\r\n"
-        f"MaxGeneratedFrames={mult - 1}\r\n"
-        "\r\n[Compatibility]\r\n"
-        "; DLSS-G 渲染预设（UI 重组，仅 310.9），Auto = 由游戏/驱动配置决定（默认）；A = 强制关；B = 强制开。\r\n"
-        "Preset=Auto\r\n"
-        "\r\n[Logging]\r\n"
-        "; 0=关闭, 1=仅错误, 2=配置与能力（含 fg_gate_* 帧生成闸门诊断）, 3=内核与求值轨迹。写入下方 Directory。\r\n"
-        f"Level={level}\r\n"
-        "Directory=dlssg_sm86\\logs\r\n"
-        "\r\n[Runtime]\r\n"
-        "; Bundled = 始终使用内嵌的配套运行库与后端（常规用法）。\r\n"
-        "Mode=Bundled\r\n"
-        "CacheDirectory=\r\n"
-    )
+
+GAME_SUPPORT_FILES = tuple(
+    path for path in PAYLOAD_SHA256
+    if path.startswith("dlssg_sm86/") and not path.startswith("dlssg_sm86/logs/")
+)
+
+
+def _backup_file(source: Path, backup_root: Path, relative: str,
+                 backups: dict[str, str]) -> str:
+    """Save one existing game file once, without overwriting an earlier rollback copy."""
+    existing = backups.get(relative)
+    if existing and Path(existing).is_file():
+        return existing
+    rel = Path(relative)
+    if rel.is_absolute() or ".." in rel.parts:
+        raise ValueError(f"Unsafe game path: {relative}")
+    dest = backup_root / "original" / rel
+    if dest.exists():
+        dest = dest.with_name(f"{dest.name}.{time.time_ns()}.bak")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, dest)
+    backups[relative] = str(dest)
+    return str(dest)
+
+
+def _copy_atomic(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        shutil.copy2(source, tmp)
+        os.replace(tmp, target)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def payload_for_entry(entry_name: str, runtime: str = "") -> tuple[Path | None, str]:
@@ -1788,11 +1951,7 @@ def payload_for_entry(entry_name: str, runtime: str = "") -> tuple[Path | None, 
 
 
 def verify_payload(runtime: str = "") -> list[str]:
-    """校验运行包完整性。
-
-    指定 runtime 时只校验该版本；未指定时校验全部版本，
-    并允许某个版本整体缺失（返回缺包提示而非逐文件报错）。
-    """
+    """校验 0.4.1 完整发布包，缺失或被改动的文件都会阻止部署。"""
     warns: list[str] = []
     src = payload_dir()
     if not src:
@@ -1801,30 +1960,27 @@ def verify_payload(runtime: str = "") -> list[str]:
         return [tr('未找到运行包目录，无法部署'),
                 "已查找位置：" + tried]
 
-    targets = [runtime] if runtime else [k for k, _p, _d in RUNTIMES]
-    for rt in targets:
-        prefix = runtime_prefix(rt)
-        rels = [prefix + item[2] for item in ENTRIES]
-        present = [r for r in rels if (src / r).is_file()]
-        if not present:
-            warns.append(tr('运行包缺少 {0} 整个版本目录').format(rt))
+    if MOD_VERSION != UPSTREAM_VERSION:
+        return [f"程序内置上游版本 {MOD_VERSION} 与清单版本 {UPSTREAM_VERSION} 不一致"]
+    if UPSTREAM_ARCHIVE_SHA256 != "7230131637617ede9dc45c552244ddb814ae70098406e102fc254d52bcdb6e14":
+        return ["程序内置上游包校验值异常"]
+    required = {INI_NAME, *(item[2] for item in ENTRIES), *GAME_SUPPORT_FILES}
+    for rel in sorted(required):
+        want = PAYLOAD_SHA256.get(rel)
+        if not want:
+            warns.append(f"内置清单缺少必要文件：{rel}")
             continue
-        for rel in rels:
-            p = src / rel
-            if not p.is_file():
-                warns.append(tr('缺少文件 {0}').format(rel))
-                continue
-            want = PAYLOAD_SHA256.get(rel)
-            if not want:
-                continue
-            try:
-                got = sha256(p)
-            except OSError as e:
-                warns.append(tr('{0} 读取失败：{1}').format(rel, e))
-                continue
-            if got != want:
-                warns.append(tr('{0} 哈希不符（本地 {1}… / 期望 {2}…）').format(
-                    rel, got[:12], want[:12]))
+        p = src / rel
+        if not p.is_file():
+            warns.append(f"缺少上游文件 {rel}")
+            continue
+        try:
+            got = sha256(p)
+        except OSError as e:
+            warns.append(f"无法读取上游文件 {rel}: {e}")
+            continue
+        if got != want:
+            warns.append(f"上游文件哈希不符 {rel}（本地 {got[:12]} / 期望 {want[:12]}）")
     return warns
 
 
@@ -1885,38 +2041,41 @@ def _is_running(exe_path: str) -> bool:
 
 def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
            prefer_entry: str = "", force: bool = False,
-           runtime: str = "", tier: int = DEFAULT_TIER) -> tuple[bool, list[str]]:
-    """部署到游戏目录。
-
-    runtime: 内嵌运行库版本（310.9 / 310.1），照搬上游两个发布包的结构；
-             310.9 上限 6X，310.1 上限 4X。
-    tier:    一致性档位 0–3（上游 0.3.2 起的 Optimized）。310.1 上会被钳到 1。
-    router/bilinear: 仅保留以兼容旧调用方，代理模式已无对应 ini 键。
-    """
+           runtime: str = "", tier: int = DEFAULT_TIER,
+           engine: str = "DLSS", preset: str = "A",
+           sr_mode: str = "Off") -> tuple[bool, list[str]]:
+    """部署上游 0.4.1 代理、运行库和配置，并记录可安全恢复的文件。"""
     logs: list[str] = []
     runtime = runtime or DEFAULT_RUNTIME
     if runtime not in [k for k, _p, _d in RUNTIMES]:
         return False, [tr('[错误] 未知运行库版本 {0}').format(runtime)]
-    cap = runtime_mult_cap(runtime)
+    engine_key = engine.strip().upper()
+    if engine_key not in {"DLSS", "XESS"}:
+        return False, [f"Unsupported frame-generation engine: {engine}"]
+    engine = "XeSS" if engine_key == "XESS" else "DLSS"
+    cap = runtime_mult_cap(runtime, engine)
     if int(mult or 2) > cap:
         logs.append(tr('[提示] {0} 上限为 {1}X，已钳制。').format(
             runtime_label(runtime), cap))
         mult = cap
 
     tier, tier_clamp = clamp_tier(tier, runtime)
-    if tier_clamp == "runtime_cap":
-        logs.append(tr('[提示] 310.1 运行库没有有损图像内核，'
-                       '档位 2/3 等同于档位 1，已按档位 1 写入。'))
-    elif tier_clamp == "invalid":
+    if tier_clamp == "invalid":
         logs.append(tr('[提示] 档位值非法，已按上游行为回退到档位 1。'))
     exe_dir = Path(game.exe_dir)
     if not exe_dir.is_dir():
         return False, [tr('[错误] 目录不存在：{0}').format(exe_dir)]
 
+    gpu = detect_gpu()
+    driver_match = re.match(r"\s*(\d+)", gpu.driver or "")
+    if driver_match and int(driver_match.group(1)) < 580:
+        return False, [tr('[错误] NVIDIA 驱动 {0} 低于上游要求 R580；已取消部署').format(gpu.driver)]
+    if not driver_match:
+        logs.append(tr('[提示] 未能读取 NVIDIA 驱动版本；上游 0.4.x 要求 R580 或更新版本。'))
+
     warns = verify_payload(runtime)
-    logs += [tr('[警告] {0}').format(w) for w in warns]
-    if any(tr('未找到运行包') in w or tr('缺少文件') in w for w in warns):
-        return False, logs
+    if warns:
+        return False, [tr('[错误] 上游运行包校验失败，已取消部署。'), *warns]
 
     hags = detect_hags()
     if not hags.supported:
@@ -1954,53 +2113,132 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
     bdir = backups_dir() / key
     bdir.mkdir(parents=True, exist_ok=True)
     st = load_state()
-    rec = st["games"].get(key, {})
+    rec = dict(st.setdefault("games", {}).get(key, {}))
+    old_managed = dict(rec.get("managed_files") or {})
+    file_backups = dict(rec.get("file_backups") or {})
     target = exe_dir / entry
     ini_path = exe_dir / INI_NAME
+    if ini_path.is_symlink() or (ini_path.exists() and not ini_path.is_file()):
+        return False, logs + [f"配置目标不是普通文件，已停止以保护现有内容：{ini_path}"]
+    support_sources = [(rel, payload_dir() / rel) for rel in GAME_SUPPORT_FILES]
+    file_sources = [(entry, src), *support_sources]
+    rels = [rel for rel, _ in file_sources] + [INI_NAME]
+    if len(set(rels)) != len(rels):
+        return False, logs + ["上游运行包的部署路径重复，已取消部署。"]
+
+    for rel, _source in file_sources:
+        dest = exe_dir / Path(rel)
+        if dest.is_symlink() or (dest.exists() and not dest.is_file()):
+            return False, logs + [f"目标路径不是普通文件，已停止以保护现有内容：{dest}"]
 
     try:
-        if target.exists():
-            cur = sha256(target)
-            if cur not in _all_known_hashes():
-                bak = bdir / (entry + ".bak")
-                shutil.copy2(target, bak)
-                rec.setdefault("backups", {})[entry] = str(bak)
-                logs.append(tr('[备份] 原有 {0} → {1}').format(entry, bak))
-        if ini_path.exists() and not rec.get("ini_backup"):
-            bak = bdir / (INI_NAME + ".bak")
-            shutil.copy2(ini_path, bak)
-            rec["ini_backup"] = str(bak)
-            logs.append(tr('[备份] 原有 {0} → {1}').format(INI_NAME, bak))
-
-        shutil.copy2(src, target)
-        new_hash = sha256(target)
-        logs.append(tr('[写入] {0} → {1}（{2}）').format(entry, target, size_text(target.stat().st_size)))
-        logs.append(tr('[校验] SHA256 {0}… 与运行包一致：{1}').format(new_hash[:20], new_hash == sha256(src)))
-
-        ini_path.write_text(build_ini(router, mult, bilinear, level, tier, runtime),
-                            encoding="utf-8")
-        logs.append(f"[配置] {INI_NAME}：Optimized={tier}（{tr(tier_label(tier))}），"
-                    f"MaxGeneratedFrames={max(1, min(5, int(mult) - 1))}"
-                    f"（最高 {min(int(mult), cap)}X），"
-                    f"Preset=Auto，运行库 {runtime}")
-    except PermissionError as e:
-        return False, logs + [tr('[错误] 权限不足或被占用：{0}').format(e),
-                              tr('[提示] 以管理员身份运行本程序，并确认游戏已完全退出')]
+        previous_ini = read_text(ini_path) if ini_path.is_file() else ""
+        ini_text = build_ini(router, mult, bilinear, level, tier, runtime,
+                             engine, preset, sr_mode, previous_ini)
     except Exception as e:
-        return False, logs + [tr('[错误] 部署失败：{0}').format(e)]
+        return False, logs + [tr('[错误] 无法生成上游配置：{0}').format(e)]
 
-    rec.update({
-        "name": game.name, "exe_dir": str(exe_dir), "exe": game.exe, "entry": entry,
-        "dll_sha256": sha256(target), "installed_at": time.time(),
-        "runtime": runtime, "mult": mult, "level": level, "tier": tier,
-        "source": game.source, "engine": game.engine, "dlssg": game.dlssg,
-    })
-    st["games"][key] = rec
-    save_state(st)
-    logs.append(tr('[完成] 已启用（{0}，档位 {1}）。重启游戏后进入画面设置，打开“帧生成”并选择倍率；'
-                   '游戏支持动态插帧时最高可选 {2}X。').format(
-                       runtime_label(runtime), tier, cap))
-    return True, logs
+    txn = Path(tempfile.mkdtemp(prefix=".deploy-", dir=bdir))
+    snapshots: dict[str, Path | None] = {}
+    changed: list[str] = []
+    try:
+        for rel in rels:
+            dest = exe_dir / Path(rel)
+            if dest.is_file():
+                snap = txn / Path(rel)
+                snap.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(dest, snap)
+                snapshots[rel] = snap
+            else:
+                snapshots[rel] = None
+
+        # First update: retain any pre-existing files that are not recorded as
+        # this manager's last deployment. Old manager state remains supported.
+        for rel, source in file_sources:
+            dest = exe_dir / Path(rel)
+            if not dest.is_file() or sha256(dest) == sha256(source):
+                continue
+            current_hash = sha256(dest)
+            is_recorded = old_managed.get(rel) == current_hash
+            is_legacy_entry = rel == rec.get("entry") and current_hash == rec.get("dll_sha256")
+            is_known_proxy = rel in {item[1] for item in ENTRIES} and current_hash in _all_known_hashes()
+            if not (is_recorded or is_legacy_entry or is_known_proxy):
+                _backup_file(dest, bdir, rel, file_backups)
+                logs.append(tr('[备份] 原有 {0} → {1}').format(rel, file_backups[rel]))
+
+        if ini_path.is_file() and not rec.get("ini_backup") and INI_NAME not in file_backups:
+            manager_ini = (APP_NAME in previous_ini[:4096]
+                           and ("生成" in previous_ini[:4096] or "Generated by" in previous_ini[:4096]))
+            if not manager_ini:
+                _backup_file(ini_path, bdir, INI_NAME, file_backups)
+                logs.append(tr('[备份] 原有 {0} → {1}').format(INI_NAME, file_backups[INI_NAME]))
+
+        managed_files: dict[str, str] = {}
+        for rel, source in file_sources:
+            dest = exe_dir / Path(rel)
+            want = PAYLOAD_SHA256[rel]
+            if not dest.is_file() or sha256(dest) != want:
+                _copy_atomic(source, dest)
+                changed.append(rel)
+            got = sha256(dest)
+            if got != want:
+                raise IOError(f"SHA-256 verification failed after writing {rel}")
+            managed_files[rel] = want
+            logs.append(tr('[写入] {0} → {1}（{2}）').format(rel, dest, size_text(dest.stat().st_size)))
+
+        ini_temp = txn / (INI_NAME + ".new")
+        ini_temp.write_text(ini_text, encoding="utf-8", newline="")
+        new_ini_hash = sha256(ini_temp)
+        if not ini_path.is_file() or sha256(ini_path) != new_ini_hash:
+            tmp_target = ini_path.with_name(f".{INI_NAME}.{time.time_ns()}.tmp")
+            shutil.copy2(ini_temp, tmp_target)
+            os.replace(tmp_target, ini_path)
+            changed.append(INI_NAME)
+        managed_files[INI_NAME] = sha256(ini_path)
+
+        new_state = dict(rec)
+        new_state.update({
+            "name": game.name, "exe_dir": str(exe_dir), "exe": game.exe, "entry": entry,
+            "dll_sha256": sha256(target), "ini_sha256": sha256(ini_path),
+            "managed_files": managed_files, "file_backups": file_backups,
+            "installed_at": time.time(), "runtime": runtime, "engine": engine,
+            "mult": mult, "level": level, "tier": tier, "preset": preset,
+            "sr_mode": sr_mode, "source": game.source, "gpu_engine": game.engine,
+            "dlssg": game.dlssg,
+        })
+        st["games"][key] = new_state
+        save_state(st)
+    except PermissionError as e:
+        logs.append(tr('[错误] 权限不足或被占用：{0}').format(e))
+        logs.append(tr('[提示] 以管理员身份运行本程序，并确认游戏已完全退出'))
+    except Exception as e:
+        logs.append(tr('[错误] 部署失败：{0}').format(e))
+    else:
+        shutil.rmtree(txn, ignore_errors=True)
+        logs.append(f"[配置] Engine={engine}, MaxGeneratedFrames={mult - 1}, "
+                    f"Preset={preset}, SuperResolution={sr_mode}, Optimized={tier}, Logging={level}")
+        logs.append(tr('[完成] 已启用（{0}，档位 {1}）。重启游戏后进入画面设置，打开“帧生成”并选择倍率；'
+                       '游戏支持动态插帧时最高可选 {2}X。').format(
+                           runtime_label(runtime), tier, cap))
+        return True, logs
+
+    # If any write or state save failed, roll back every target touched by this
+    # operation. The transaction copies are separate from long-term backups.
+    rollback_errors: list[str] = []
+    for rel in reversed(changed):
+        dest = exe_dir / Path(rel)
+        snapshot = snapshots.get(rel)
+        try:
+            if snapshot and snapshot.is_file():
+                _copy_atomic(snapshot, dest)
+            elif dest.is_file():
+                dest.unlink()
+        except Exception as rollback_error:
+            rollback_errors.append(f"{rel}: {rollback_error}")
+    shutil.rmtree(txn, ignore_errors=True)
+    if rollback_errors:
+        logs.append("回滚未完全成功：" + "; ".join(rollback_errors))
+    return False, logs
 
 
 def restore(game: Game) -> tuple[bool, list[str]]:
@@ -2018,53 +2256,100 @@ def restore(game: Game) -> tuple[bool, list[str]]:
         if not ours:
             return False, [tr('[信息] 该目录没有本工具的部署记录，未做任何改动')]
         rec = {"entry": entry, "backups": {}}
-    entry = rec.get("entry", "")
-
     removed = 0
-    if entry:
-        f = exe_dir / entry
-        if f.is_file():
+    complete = True
+    managed = dict(rec.get("managed_files") or {})
+    if not managed:
+        entry = rec.get("entry", "")
+        if entry:
+            managed[entry] = rec.get("dll_sha256", "")
+        ini = exe_dir / INI_NAME
+        if ini.is_file():
             try:
-                cur = sha256(f)
-                if cur == rec.get("dll_sha256") or cur in _all_known_hashes():
-                    f.unlink()
-                    removed += 1
-                    logs.append(tr('[移除] {0}').format(entry))
-                else:
-                    logs.append(tr('[跳过] {0} 已被替换为其他文件，为安全起见不删除').format(entry))
-            except OSError as e:
-                logs.append(tr('[错误] 无法删除 {0}：{1}').format(entry, e))
+                head = read_text(ini)[:4096]
+                if (APP_NAME in head and
+                        ("生成" in head or "Generated by" in head)):
+                    managed[INI_NAME] = rec.get("ini_sha256", "")
+            except OSError:
+                pass
 
-    ini = exe_dir / INI_NAME
-    if ini.is_file():
+    for rel, expected in managed.items():
+        path = Path(rel)
+        if path.is_absolute() or ".." in path.parts:
+            logs.append(f"[跳过] 状态记录含不安全路径：{rel}")
+            complete = False
+            continue
+        target = exe_dir / path
+        if not target.is_file():
+            continue
         try:
-            ini.unlink()
-            removed += 1
-            logs.append(tr('[移除] {0}').format(INI_NAME))
+            current = sha256(target)
+            if expected:
+                is_owned = current == expected
+            elif rel == INI_NAME:
+                head = read_text(target)[:4096]
+                is_owned = APP_NAME in head and ("生成" in head or "Generated by" in head)
+            else:
+                is_owned = rel in {item[1] for item in ENTRIES} and current in _all_known_hashes()
+            if is_owned:
+                target.unlink()
+                removed += 1
+                logs.append(tr('[移除] {0}').format(rel))
+            else:
+                logs.append(tr('[跳过] {0} 已被替换或修改，为安全起见保留').format(rel))
+                complete = False
         except OSError as e:
-            logs.append(tr('[错误] 无法删除 {0}：{1}').format(INI_NAME, e))
+            logs.append(tr('[错误] 无法移除 {0}：{1}').format(rel, e))
+            complete = False
 
-    for fname, bak in (rec.get("backups") or {}).items():
-        b = Path(bak)
-        if b.is_file():
-            try:
-                shutil.copy2(b, exe_dir / fname)
-                logs.append(tr('[还原] {0} ← {1}').format(fname, b.name))
-            except Exception as e:
-                logs.append(tr('[错误] 还原 {0} 失败：{1}').format(fname, e))
-    if rec.get("ini_backup") and Path(rec["ini_backup"]).is_file():
+    backup_root = (backups_dir() / key).resolve()
+
+    def restore_backup(rel: str, backup: str) -> None:
+        nonlocal complete
+        path = Path(rel)
+        if path.is_absolute() or ".." in path.parts:
+            logs.append(f"[跳过] 备份记录含不安全路径：{rel}")
+            complete = False
+            return
+        source = Path(backup).resolve()
         try:
-            shutil.copy2(rec["ini_backup"], ini)
-            logs.append(tr('[还原] {0} ← 备份').format(INI_NAME))
+            source.relative_to(backup_root)
+        except ValueError:
+            logs.append(f"[跳过] 备份位置不在本工具备份目录内：{backup}")
+            complete = False
+            return
+        if not source.is_file():
+            return
+        target = exe_dir / path
+        if target.exists():
+            logs.append(tr('[跳过] {0} 已有文件，保留当前内容以免覆盖').format(rel))
+            complete = False
+            return
+        try:
+            _copy_atomic(source, target)
+            logs.append(tr('[还原] {0} ← 备份').format(rel))
         except Exception as e:
-            logs.append(tr('[错误] 还原配置失败：{0}').format(e))
+            logs.append(tr('[错误] 还原 {0} 失败：{1}').format(rel, e))
+            complete = False
 
-    if st["games"].pop(key, None):
+    for rel, backup in (rec.get("file_backups") or {}).items():
+        restore_backup(rel, backup)
+    for fname, backup in (rec.get("backups") or {}).items():
+        # Legacy records only contained a top-level proxy DLL name.
+        restore_backup(fname, backup)
+    if rec.get("ini_backup"):
+        restore_backup(INI_NAME, rec["ini_backup"])
+
+    if complete:
+        st.setdefault("games", {}).pop(key, None)
         save_state(st)
-    if removed == 0:
+    elif removed == 0:
+        logs.append("部分修改后的文件仍在原处，状态记录已保留，检查并重试恢复即可。")
+    if removed == 0 and complete:
         logs.append(tr('[信息] 没有发现需要移除的文件'))
-    logs.append(tr('[完成] 已恢复到部署前的状态；游戏自带的 DLSSG 文件未受影响'))
-    return True, logs
+    if complete:
+        logs.append(tr('[完成] 已恢复到部署前的状态；游戏自带的 DLSSG 文件未受影响'))
+    return complete, logs
 
 
 def read_deployed_config(exe_dir: str) -> dict:
@@ -2072,16 +2357,33 @@ def read_deployed_config(exe_dir: str) -> dict:
     if not f.is_file():
         return {}
     txt = read_text(f)
-    cfg = {}
-    for k in ("Router", "KernelImage", "HardwareBilinear", "MaxGeneratedFrames", "Level",
-              "Enabled", "Optimized", "OptimizedKernels", "Preset",
-              "ImageApprox", "SkipRepeatedRealCopy"):
-        m = re.search(rf"^{k}\s*=\s*(\S+)", txt, re.M)
-        if m:
-            cfg[k] = m.group(1)
-    # 档位规范化：0.3.1 及更早只写 0/1，0.3.2 起写 0–3；
-    # OptimizedKernels 是官方保留的向后兼容别名（两者都在时 Optimized 优先）。
-    raw = cfg.get("Optimized") or cfg.get("OptimizedKernels")
+    cfg: dict[str, str | int] = {}
+    section = ""
+    for line in txt.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith((";", "#")):
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped[1:-1].strip()
+            continue
+        if "=" not in stripped:
+            continue
+        key, value = (part.strip() for part in stripped.split("=", 1))
+        if not key or not value:
+            continue
+        if key in {"Router", "KernelImage", "HardwareBilinear", "MaxGeneratedFrames", "Level",
+                   "Enabled", "Optimized", "OptimizedKernels", "Preset", "ImageApprox",
+                   "SkipRepeatedRealCopy", "Engine", "Mode"}:
+            cfg[key] = value
+        cfg[f"{section}.{key}"] = value
+    if "FrameGeneration.Engine" in cfg:
+        cfg["Engine"] = cfg["FrameGeneration.Engine"]
+    if "DLSSG.Preset" in cfg:
+        cfg["Preset"] = cfg["DLSSG.Preset"]
+    if "SuperResolution.Mode" in cfg:
+        cfg["SRMode"] = cfg["SuperResolution.Mode"]
+    # Both the legacy [FrameGeneration] Optimized and 0.4.x [DLSSG] Optimized are supported.
+    raw = cfg.get("DLSSG.Optimized") or cfg.get("Optimized") or cfg.get("OptimizedKernels")
     if raw is not None:
         try:
             t = int(raw)
@@ -2093,9 +2395,35 @@ def read_deployed_config(exe_dir: str) -> dict:
 
 # ---------------------------------------------------------------- 汇总
 
+SCAN_MAX_WORKERS = 4
+
+
+def _analyze_game_root(row: tuple[int, str, str, str], state_games: dict) -> tuple[int, Game | None]:
+    """Read-only analysis for one game root; safe to run in a bounded worker pool."""
+    index, name, path, source = row
+    cands = find_candidates(path)
+    if not cands:
+        return index, None
+    best = cands[0]
+    exe_dir_c = canon_dir(best.exe_dir)
+    game = Game(gid=game_key(exe_dir_c), name=name, source=source,
+                install_dir=canon_dir(path), exe=canon_dir(best.exe), exe_dir=exe_dir_c,
+                engine=best.engine, dlssg=best.dlssg, dlss=best.dlss,
+                candidates=[asdict(candidate) for candidate in cands])
+    game.anticheat = detect_anticheat(path)
+    record = state_games.get(game.gid)
+    entry, ours = entry_of_deployment(best.exe_dir)
+    game.deployed = bool(record) and bool(entry) and ours
+    game.entry = entry or (record or {}).get("entry", "")
+    game.installed_at = (record or {}).get("installed_at", 0)
+    game.config = read_deployed_config(best.exe_dir)
+    game.resolution = guess_resolution(best.exe_dir, name, best.exe)
+    return index, game
+
 def collect_games(state: dict, progress=None, extra: list[tuple[str, str, str]] | None = None,
                   deep_roots: list[str] | None = None, deep_budget: float = 75.0) -> list[Game]:
     """汇总所有来源 → 定位渲染 EXE → 返回游戏列表。"""
+    ignored_gids, ignored_install_dirs, ignored_exe_dirs = _ignored_game_indexes(state)
     rows: list[tuple[str, str, str]] = []
     for label, fn in (("Steam", scan_steam), ("Epic", scan_epic),
                       ("GOG", scan_gog), ("Ubisoft", scan_ubisoft)):
@@ -2118,36 +2446,41 @@ def collect_games(state: dict, progress=None, extra: list[tuple[str, str, str]] 
 
     seen, uniq = set(), []
     for name, path, source in rows:
-        k = norm(path)
+        try:
+            k = norm(canon_dir(path))
+        except Exception:
+            k = norm(path)
+        if k in ignored_install_dirs:
+            continue
         if k in seen:
             continue
         seen.add(k)
         uniq.append((name, path, source))
 
-    games: list[Game] = []
     total = len(uniq)
-    for i, (name, path, source) in enumerate(uniq, 1):
-        if progress and i % 2 == 0:
-            progress(tr('正在分析渲染进程… {0}/{1}').format(i, total))
-        cands = find_candidates(path)
-        if not cands:
-            continue
-        best = cands[0]
-        exe_dir_c = canon_dir(best.exe_dir)
-        g = Game(gid=game_key(exe_dir_c), name=name, source=source,
-                 install_dir=canon_dir(path),
-                 exe=canon_dir(best.exe), exe_dir=exe_dir_c, engine=best.engine,
-                 dlssg=best.dlssg, dlss=best.dlss,
-                 candidates=[asdict(c) for c in cands])
-        g.anticheat = detect_anticheat(path)
-        rec = state["games"].get(g.gid)
-        entry, ours = entry_of_deployment(best.exe_dir)
-        g.deployed = bool(rec) and bool(entry) and ours
-        g.entry = entry or (rec or {}).get("entry", "")
-        g.installed_at = (rec or {}).get("installed_at", 0)
-        g.config = read_deployed_config(best.exe_dir)
-        g.resolution = guess_resolution(best.exe_dir, name, best.exe)
-        games.append(g)
+    analyzed: list[Game | None] = [None] * total
+    if total:
+        worker_count = min(SCAN_MAX_WORKERS, total)
+        indexed_rows = [(i, name, path, source) for i, (name, path, source) in enumerate(uniq)]
+        with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="dlssg-scan") as pool:
+            pending = {pool.submit(_analyze_game_root, row, state.get("games", {})): row[0]
+                       for row in indexed_rows}
+            completed = 0
+            if progress:
+                progress(tr('正在分析渲染进程… {0}/{1}').format(0, total))
+            for future in as_completed(pending):
+                index, game = future.result()
+                if game is not None and (
+                    str(game.gid) in ignored_gids
+                    or norm(canon_dir(game.install_dir)) in ignored_install_dirs
+                    or norm(canon_dir(game.exe_dir)) in ignored_exe_dirs
+                ):
+                    game = None
+                analyzed[index] = game
+                completed += 1
+                if progress and (completed % 2 == 0 or completed == total):
+                    progress(tr('正在分析渲染进程… {0}/{1}').format(completed, total))
+    games = [game for game in analyzed if game is not None]
 
     # 去重（同一 exe_dir 只保留一次）
     dedup, seen_dir = [], set()
@@ -2215,9 +2548,12 @@ def _cli(argv: list[str]) -> int:
         entry = argv[argv.index("--entry") + 1] if "--entry" in argv else ""
         runtime = argv[argv.index("--runtime") + 1] if "--runtime" in argv else ""
         tier = int(argv[argv.index("--tier") + 1]) if "--tier" in argv else DEFAULT_TIER
+        engine = argv[argv.index("--engine") + 1] if "--engine" in argv else "DLSS"
+        preset = argv[argv.index("--preset") + 1] if "--preset" in argv else "A"
+        sr_mode = argv[argv.index("--sr") + 1] if "--sr" in argv else "Off"
         g = Game(name=Path(target).name, exe_dir=canon_dir(target))
         ok, logs = deploy(g, router, mult, "--bilinear" in argv, 1, entry, bool(entry),
-                          runtime, tier)
+                          runtime, tier, engine, preset, sr_mode)
         for l in logs:
             log(l)
         return 0 if ok else 1
@@ -2240,7 +2576,8 @@ def _cli(argv: list[str]) -> int:
     print("  --hags [--on|--off]   查看 / 开启 / 关闭硬件加速 GPU 计划")
     print("  --scan [--deep <盘符>] 扫描游戏并输出 JSON")
     print("  --install <EXE目录> [--router SM86|SM75] [--mult 2|3|4] [--bilinear]"
-          " [--entry <入口>] [--runtime 310.9|310.1] [--tier 0|1|2|3]")
+          " [--entry <入口>] [--runtime 310.9.16] [--tier 0|1|2|3]"
+          " [--engine DLSS|XeSS] [--preset A|B|C] [--sr Off|M-INT8|L-INT8|M-FP16|L-FP16]")
     print("  --restore <EXE目录>")
     return 0
 
