@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import zipfile
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
@@ -36,7 +37,7 @@ from upstream_payload import (
 )
 
 APP_NAME = "DLSSG Manager"
-APP_VERSION = "1.9.3"
+APP_VERSION = "1.9.6"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
 
 # 界面缩放：由用户在标题栏选择，持久化到 state.json，启动时通过
@@ -55,10 +56,23 @@ INI_NAME = "dlssg_sm86.ini"
 LOG_DIR_NAME = "dlssg_sm86"
 
 # 上游 0.4.x 采用一个独立运行包目录，310.9.16 随包放在 dlssg_sm86/runtime。
+# 0.3.5 是 0.4.x 之前的最后一个稳定版：代理 DLL 自带运行库，不需要
+# dlssg_sm86/ 目录。它仍被保留为兼容回退项 —— 0.4.x 在部分游戏上会
+# 因新运行库 / 驱动拒绝而无法进入，而 0.3.5 在这些游戏上仍可注入。
 RUNTIMES = [
     ("310.9.16", "", "310.9.16 运行库（上游 0.4.1）"),
+    ("310.9", "", "310.9 运行库（上游 0.3.5 兼容）"),
+    ("310.1", "310.1/", "310.1 运行库（上游 0.3.5 兼容）"),
 ]
 DEFAULT_RUNTIME = "310.9.16"
+
+# 兼容回退包：0.3.5 的 12 个代理（310.9 / 310.1 各 6 个入口）压成一个
+# 压缩包，首次选用时解到 %LOCALAPPDATA%\DLSSGManager\packs\ 下。这样
+# 安装包不用常驻 360 MB 的旧 DLL，只有需要回退的用户才展开它。
+LEGACY_UPSTREAM_VERSION = "0.3.5"
+LEGACY_RUNTIMES = ("310.9", "310.1")
+LEGACY_PACK_ARCHIVE = "packs/upstream-0.3.5-x64.zip"
+LEGACY_PACK_DIRNAME = "upstream-0.3.5"
 
 # 入口 DLL：(内部键, 部署文件名, 包内相对路径, 说明, 分组)
 # 分组照上游 alternatives/README.md：
@@ -195,16 +209,30 @@ PAYLOAD_SHA256 = PAYLOAD_SHA256_BY_VERSION[MOD_VERSION]
 
 
 def runtime_prefix(rt: str) -> str:
-    """上游 0.4.1 的运行库随 dlssg_sm86/ 一起部署，不按版本切目录。"""
+    """0.4.1 的运行库随 dlssg_sm86/ 一起部署；0.3.5 的 310.1 在 310.1/ 子目录。"""
     for key, prefix, _desc in RUNTIMES:
         if key == rt:
             return prefix
     return ""
 
 
+def runtime_is_legacy(rt: str) -> bool:
+    """该运行库是否来自 0.3.5 兼容包（单文件代理，无 dlssg_sm86/ 目录）。"""
+    return (rt or DEFAULT_RUNTIME) in LEGACY_RUNTIMES
+
+
+def runtime_upstream(rt: str) -> str:
+    """运行库对应的上游版本号。"""
+    return LEGACY_UPSTREAM_VERSION if runtime_is_legacy(rt) else UPSTREAM_VERSION
+
+
 def runtime_mult_cap(rt: str = DEFAULT_RUNTIME, engine: str = "DLSS") -> int:
-    """上游 DLSS 最高 6X，XeSS-FG 最高 4X。"""
-    return 4 if engine.upper() == "XESS" else 6
+    """上游 DLSS 最高 6X，XeSS-FG 最高 4X；0.3.5 的 310.1 最高 4X。"""
+    if engine.upper() == "XESS":
+        return 4
+    if (rt or DEFAULT_RUNTIME) == "310.1":
+        return 4
+    return 6
 
 
 # ---------------------------------------------------------------- 一致性档位
@@ -223,8 +251,8 @@ FACTORY_OPTIMIZED = 1
 
 
 def tier_cap(runtime: str) -> int:
-    """上游 0.4.1 的唯一内嵌运行库支持全部四档。"""
-    return TIER_MAX
+    """0.4.1 支持四档；0.3.5 的 310.9 支持四档，310.1 只有档位 0/1。"""
+    return 1 if (runtime or DEFAULT_RUNTIME) == "310.1" else TIER_MAX
 
 
 def tier_label(tier: int) -> str:
@@ -403,6 +431,134 @@ def sha256(path: Path, block: int = 1 << 20) -> str:
                 break
             h.update(b)
     return h.hexdigest()
+
+
+# ---------------------------------------------------------------- 0.3.5 兼容包
+
+def legacy_pack_archive() -> Path | None:
+    """定位随包的 0.3.5 兼容压缩包（payload/packs/...）。"""
+    for cand in payload_search_paths():
+        p = cand / LEGACY_PACK_ARCHIVE
+        try:
+            if p.is_file():
+                return p
+        except OSError:
+            continue
+    return None
+
+
+def legacy_pack_root() -> Path:
+    return data_dir() / "packs" / LEGACY_PACK_DIRNAME
+
+
+def legacy_pack_ready(root: Path | None = None) -> bool:
+    """兼容包是否已解压且逐文件哈希一致。"""
+    root = root or legacy_pack_root()
+    table = PAYLOAD_SHA256_BY_VERSION.get(LEGACY_UPSTREAM_VERSION) or {}
+    if not table:
+        return False
+    for rel, want in table.items():
+        p = root / rel
+        try:
+            if not p.is_file() or sha256(p) != want:
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def _safe_zip_member(name: str) -> tuple[str, ...] | None:
+    """校验压缩包成员路径，拒绝绝对路径、盘符、.. 和反斜杠。"""
+    if "\\" in name or any(ord(ch) < 32 for ch in name):
+        raise ValueError(f"Unsafe archive path: {name!r}")
+    parts = tuple(part for part in name.split("/") if part not in ("", "."))
+    if name.startswith("/") or ".." in parts or not parts:
+        raise ValueError(f"Unsafe archive path: {name!r}")
+    if len(parts[0]) == 2 and parts[0][1] == ":":
+        raise ValueError(f"Unsafe archive path: {name!r}")
+    return parts
+
+
+def ensure_legacy_pack() -> tuple[Path | None, str]:
+    """解压并校验 0.3.5 兼容包；返回 (目录, 错误)。"""
+    root = legacy_pack_root()
+    if legacy_pack_ready(root):
+        return root, ""
+    archive = legacy_pack_archive()
+    if not archive:
+        return None, tr('未找到旧版兼容包 {0}，请确认程序目录完整').format(LEGACY_PACK_ARCHIVE)
+    table = PAYLOAD_SHA256_BY_VERSION.get(LEGACY_UPSTREAM_VERSION) or {}
+    if not table:
+        return None, tr('程序内置的旧版文件清单缺失')
+    root.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=".pack-0.3.5-", dir=root.parent))
+    try:
+        with zipfile.ZipFile(archive) as zf:
+            if zf.testzip() is not None:
+                raise ValueError("兼容包校验失败（CRC）")
+            seen: set[str] = set()
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                parts = _safe_zip_member(info.filename)
+                if parts is None:
+                    continue
+                key = "/".join(parts).casefold()
+                if key in seen:
+                    raise ValueError(f"兼容包内重复路径：{info.filename}")
+                seen.add(key)
+                target = stage.joinpath(*parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(info) as src, target.open("xb") as dst:
+                    shutil.copyfileobj(src, dst, 1 << 20)
+                if target.stat().st_size != info.file_size:
+                    raise ValueError(f"兼容包解压长度不符：{info.filename}")
+        for rel, want in table.items():
+            p = stage / rel
+            if not p.is_file():
+                raise ValueError(f"兼容包缺少文件：{rel}")
+            if sha256(p) != want:
+                raise ValueError(f"兼容包文件哈希不符：{rel}")
+        if root.exists():
+            shutil.rmtree(root)
+        os.replace(stage, root)
+        return root, ""
+    except Exception as e:
+        shutil.rmtree(stage, ignore_errors=True)
+        return None, tr('旧版兼容包无法使用：{0}').format(e)
+
+
+def pack_dir(runtime: str = "") -> tuple[Path | None, str]:
+    """运行包根目录：0.4.x 用 payload/，0.3.5 用解压后的兼容包。"""
+    rt = runtime or DEFAULT_RUNTIME
+    if runtime_is_legacy(rt):
+        return ensure_legacy_pack()
+    src = payload_dir()
+    if not src:
+        return None, tr('未找到运行包（payload/version.dll），请确认程序目录完整')
+    return src, ""
+
+
+def support_files_for(runtime: str = "") -> tuple[str, ...]:
+    """该运行库需要随代理一起部署的附属文件（0.3.5 全部内嵌在代理里）。"""
+    return () if runtime_is_legacy(runtime) else GAME_SUPPORT_FILES
+
+
+def prune_empty_dirs(root: Path) -> None:
+    """删除空目录树（只删空目录，日志和用户文件不受影响）。"""
+    if not root.is_dir():
+        return
+    for p in sorted(root.rglob("*"), key=lambda x: len(x.parts), reverse=True):
+        if p.is_dir():
+            try:
+                p.rmdir()
+            except OSError:
+                pass
+    try:
+        root.rmdir()
+    except OSError:
+        pass
+
 
 
 def norm(p) -> str:
@@ -909,12 +1065,108 @@ def restore_gpu_mask() -> tuple[bool, str]:
     return True, tr('已还原为 {0}，重启电脑后生效').format(original)
 
 
+# ---------------------------------------------------------------- 显卡设备重启
+# cfgmgr32.h 的设备节点状态位
+DN_NEED_RESTART = 0x00000100
+
+
+def _devnode_status(instance_id: str) -> tuple[int, int] | None:
+    """读取设备节点状态位，返回 (status, problem)；查不到返回 None。
+
+    只读查询，不改动设备。用于判断系统是否已把该设备标记为「等待重启」。
+    """
+    if os.name != "nt" or not instance_id:
+        return None
+    try:
+        import ctypes
+
+        cfg = ctypes.WinDLL("cfgmgr32")
+        cfg.CM_Locate_DevNodeW.argtypes = (ctypes.POINTER(ctypes.c_uint32),
+                                           ctypes.c_wchar_p, ctypes.c_ulong)
+        cfg.CM_Locate_DevNodeW.restype = ctypes.c_ulong
+        cfg.CM_Get_DevNode_Status.argtypes = (ctypes.POINTER(ctypes.c_uint32),
+                                              ctypes.POINTER(ctypes.c_uint32),
+                                              ctypes.c_uint32, ctypes.c_ulong)
+        cfg.CM_Get_DevNode_Status.restype = ctypes.c_ulong
+        devinst = ctypes.c_uint32(0)
+        if cfg.CM_Locate_DevNodeW(ctypes.byref(devinst), instance_id, 0) != 0:
+            return None
+        status = ctypes.c_uint32(0)
+        problem = ctypes.c_uint32(0)
+        if cfg.CM_Get_DevNode_Status(ctypes.byref(status), ctypes.byref(problem),
+                                     devinst, 0) != 0:
+            return None
+        return int(status.value), int(problem.value)
+    except Exception:
+        return None
+
+
+def gpu_device_needs_reboot() -> bool:
+    """显卡设备是否已被系统标记为「等待重启」（DN_NEED_RESTART）。
+
+    处在该状态时 pnputil /restart-device 会返回 ERROR_NOT_SUPPORTED(50)，
+    驱动栈拒绝就地重启，只能重启电脑完成配置。
+    """
+    info = detect_gpu_mask()
+    if not info.enum_key:
+        return False
+    status = _devnode_status(info.enum_key.split("Enum\\", 1)[-1])
+    return bool(status and (status[0] & DN_NEED_RESTART))
+
+
+def _no_window_flag() -> int:
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _restart_via_pnputil(instance_id: str) -> tuple[bool, str, bool]:
+    """pnputil /restart-device。返回 (成功, 输出, 该命令是否不被支持)。"""
+    try:
+        r = subprocess.run(["pnputil", "/restart-device", instance_id],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=60,
+                           creationflags=_no_window_flag())
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}", False
+    out = ((r.stderr or "") + " " + (r.stdout or "")).strip()
+    low = out.lower()
+    unsupported = (r.returncode == 50 or "not supported" in low
+                   or "不支持" in out)
+    return r.returncode == 0, out, unsupported
+
+
+def _restart_via_powershell(instance_id: str) -> tuple[bool, str]:
+    """备用路径：Disable-PnpDevice + Enable-PnpDevice（等价于设备管理器禁用/启用）。"""
+    inst = instance_id.replace("'", "''")
+    ps = (
+        "[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
+        "$ErrorActionPreference='Stop';"
+        f"$id='{inst}';"
+        "Disable-PnpDevice -InstanceId $id -Confirm:$false;"
+        "Start-Sleep -Milliseconds 800;"
+        "Enable-PnpDevice -InstanceId $id -Confirm:$false;"
+        "'OK'"
+    )
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive",
+                            "-Command", ps],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=120,
+                           creationflags=_no_window_flag())
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+    out = ((r.stderr or "") + " " + (r.stdout or "")).strip()
+    if r.returncode == 0 and "OK" in (r.stdout or ""):
+        return True, ""
+    return False, out[-300:] or f"code={r.returncode}"
+
+
 def restart_gpu_device() -> tuple[bool, str]:
     """重启显卡设备，让名称改动立即生效。
 
     DXGI 在驱动初始化时缓存适配器名称，改注册表后不重启不会刷新
     （实测：改完立即读 DXGI 仍是旧名，重启设备后变为新名）。
-    用 pnputil /restart-device 等效于禁用+启用设备，通常伴随短暂黑屏。
+    先查设备节点是否已被标记「等待重启」：这种状态下 pnputil 一律失败，
+    只能重启电脑；否则 pnputil 优先，不被支持时退回设备管理器式禁用/启用。
     """
     if os.name != "nt":
         return False, tr('非 Windows 系统')
@@ -924,16 +1176,40 @@ def restart_gpu_device() -> tuple[bool, str]:
     if not info.enum_key:
         return False, tr('未找到 NVIDIA 显卡设备实例')
     inst = info.enum_key.split("Enum\\", 1)[-1]
+
+    if gpu_device_needs_reboot():
+        return False, tr('显卡设备已被系统标记为「等待重启」，重启设备无法完成配置，需要重启电脑后生效。')
+
+    ok, out, unsupported = _restart_via_pnputil(inst)
+    if ok:
+        return True, tr('已重启显卡设备，新的显卡名称立即生效')
+    if not unsupported:
+        return False, tr('重启设备失败：{0}').format(out[:200] or '未知原因')
+
+    ok2, detail2 = _restart_via_powershell(inst)
+    if ok2:
+        return True, tr('已重启显卡设备，新的显卡名称立即生效')
+    return False, tr('重启设备失败：{0}').format(detail2[:200] or '未知原因')
+
+
+def schedule_reboot(delay_seconds: int = 60) -> tuple[bool, str]:
+    """安排重启电脑（delay 秒后），用于让显卡名称配置生效。"""
+    if os.name != "nt":
+        return False, tr('非 Windows 系统')
+    if not is_admin():
+        return False, tr('需要管理员权限才能安排重启')
+    delay = max(0, min(int(delay_seconds), 86400))
     try:
-        r = subprocess.run(["pnputil", "/restart-device", inst],
-                           capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=60)
-        if r.returncode == 0:
-            return True, tr('已重启显卡设备，新的显卡名称立即生效')
-        return False, tr('重启设备失败：{0}').format(
-            (r.stderr or r.stdout or '').strip()[:200] or f"code={r.returncode}")
+        r = subprocess.run(["shutdown", "/r", "/t", str(delay)],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=20,
+                           creationflags=_no_window_flag())
     except Exception as e:
-        return False, tr('重启设备失败：{0}: {1}').format(type(e).__name__, e)
+        return False, tr('重启计划失败：{0}: {1}').format(type(e).__name__, e)
+    if r.returncode == 0:
+        return True, tr('已安排在 {0} 秒后重启电脑').format(delay)
+    detail = ((r.stderr or r.stdout or '').strip() or f"code={r.returncode}")[:200]
+    return False, tr('重启计划失败：{0}').format(detail)
 
 
 def gpu_mask_cli_text(info: GpuMaskInfo | None = None) -> str:
@@ -1801,6 +2077,25 @@ def entry_of_deployment(exe_dir: str) -> tuple[str, bool]:
     except OSError:
         pass
     known = _all_known_hashes()
+
+    # Multiple known proxies can survive older deploys. Prefer the entry this
+    # game record says we installed, rather than the first matching filename.
+    try:
+        record = (load_state().get("games") or {}).get(game_key(str(d)), {})
+    except Exception:
+        record = {}
+    preferred = str(record.get("entry") or "").strip().lower()
+    if preferred in {item[1] for item in ENTRIES}:
+        f = d / preferred
+        try:
+            digest = sha256(f) if f.is_file() and not f.is_symlink() else ""
+            if (digest in known
+                    or record.get("dll_sha256") == digest
+                    or (record.get("managed_files") or {}).get(preferred) == digest):
+                return preferred, True
+        except OSError:
+            pass
+
     for item in ENTRIES:
         fname = item[1]
         f = d / fname
@@ -1856,11 +2151,59 @@ def _merge_compatible_ini(template: str, previous: str) -> str:
     return template
 
 
+def _build_legacy_ini(mult: int, level: int, tier: int, runtime: str) -> str:
+    """按上游 0.3.5 的键位生成旧格式配置。
+
+    0.3.5 的代理把运行库内嵌在 DLL 里，不吃 0.4.x 的 [DLSSG] / [SuperResolution]
+    等键，只认 [FrameGeneration] Optimized 与 [Compatibility] Preset。写错键位
+    不会报错，只会静默按默认值运行，所以这里必须逐字对齐旧版格式。
+    """
+    cap = runtime_mult_cap(runtime, "DLSS")
+    mult = max(2, min(cap, int(mult or 2)))
+    tier, _reason = clamp_tier(tier, runtime)
+    level = max(0, min(3, int(level)))
+    lines = [
+        f"; DLSSG SM86 {LEGACY_UPSTREAM_VERSION} · {APP_NAME} {APP_VERSION}",
+        "; Generated by DLSSG Manager（由本工具生成）；修改后需重启游戏才生效。",
+        "; 本文件只覆盖下面列出的键，其余保持上游默认。",
+        "",
+        "[General]",
+        "; 1 = 启用插帧；0 = 关闭，游戏自带的 DLSS-G 保持原样。",
+        "Enabled=1",
+        "",
+        "[FrameGeneration]",
+        "; 一致性档位：0 = 原厂内核；1 = 逐位一致（推荐）；2 / 3 = 有损加速。",
+        "; 310.1 只支持 0 / 1（档位 2 / 3 在该运行库上等同档位 1）。",
+        f"Optimized={tier}",
+        "; 额外生成帧数：5 = 最高 6X（310.9）；3 = 最高 4X（310.1）。",
+        f"MaxGeneratedFrames={mult - 1}",
+        "",
+        "[Compatibility]",
+        "; 0.3.5 只有 Auto：由游戏/运行库自行决定，不提供 0.4.x 的 A/B/C 预设。",
+        "Preset=Auto",
+        "",
+        "[Logging]",
+        f"Level={level}",
+        "Directory=dlssg_sm86\\logs",
+        "",
+        "[Runtime]",
+        "; Bundled = 始终使用代理内嵌的运行库，不会读取 dlssg_sm86/ 目录。",
+        "Mode=Bundled",
+        "CacheDirectory=",
+        "",
+    ]
+    return "\r\n".join(lines)
+
+
 def build_ini(router: str, mult: int, bilinear: bool, level: int,
               tier: int = DEFAULT_TIER, runtime: str = "",
               engine: str = "DLSS", preset: str = "A",
               sr_mode: str = "Off", previous: str = "") -> str:
-    """基于上游 0.4.1 完整模板生成配置，保留上游注释及安全默认项。"""
+    """生成运行库配置：0.4.x 用上游完整模板，0.3.5 用旧格式模板。"""
+    rt = runtime or DEFAULT_RUNTIME
+    if runtime_is_legacy(rt):
+        return _build_legacy_ini(mult, level, tier, rt)
+
     source = payload_dir()
     template_path = source / INI_NAME if source else None
     if not template_path or not template_path.is_file():
@@ -1902,6 +2245,16 @@ GAME_SUPPORT_FILES = tuple(
     if path.startswith("dlssg_sm86/") and not path.startswith("dlssg_sm86/logs/")
 )
 
+# 部署文件名 → 包内相对路径。替代入口在包里放在 alternatives/ 下，而目标文件
+# 直接写在游戏目录根部（如 winmm.dll），所以查哈希前必须先映射回包内路径，
+# 否则 PAYLOAD_SHA256 会以部署名做键并抛 KeyError。
+_PAYLOAD_REL_BY_ENTRY = {item[1]: item[2] for item in ENTRIES}
+
+
+def payload_rel(rel: str) -> str:
+    """把部署文件名映射到包内相对路径；非入口文件原样返回。"""
+    return _PAYLOAD_REL_BY_ENTRY.get(rel, rel)
+
 
 def _backup_file(source: Path, backup_root: Path, relative: str,
                  backups: dict[str, str]) -> str:
@@ -1935,11 +2288,16 @@ def _copy_atomic(source: Path, target: Path) -> None:
 
 
 def payload_for_entry(entry_name: str, runtime: str = "") -> tuple[Path | None, str]:
-    """按入口名 + 运行库版本解析 payload 内的源文件路径。"""
-    src = payload_dir()
+    """按入口名 + 运行库版本解析运行包内的源文件路径。
+
+    0.4.x 从随包的 payload/ 取，0.3.5 从解压后的兼容包取；310.1 在 310.1/
+    子目录下，310.9 在根目录。
+    """
+    rt = runtime or DEFAULT_RUNTIME
+    src, err = pack_dir(rt)
     if not src:
-        return None, tr('未找到运行包（payload/version.dll），请确认程序目录完整')
-    prefix = runtime_prefix(runtime or DEFAULT_RUNTIME)
+        return None, err
+    prefix = runtime_prefix(rt)
     for item in ENTRIES:
         fname, rel = item[1], item[2]
         if fname.lower() == entry_name.lower():
@@ -1950,8 +2308,41 @@ def payload_for_entry(entry_name: str, runtime: str = "") -> tuple[Path | None, 
     return None, tr('未知入口 {0}').format(entry_name)
 
 
+def _check_payload_table(root: Path, table: dict[str, str],
+                         required: list[str]) -> list[str]:
+    """逐文件比对内置 SHA-256 清单；缺失、不可读或哈希不符都算失败。"""
+    warns: list[str] = []
+    for rel in sorted(required):
+        want = table.get(rel)
+        if not want:
+            warns.append(f"内置清单缺少必要文件：{rel}")
+            continue
+        p = root / rel
+        if not p.is_file():
+            warns.append(f"缺少上游文件 {rel}")
+            continue
+        try:
+            got = sha256(p)
+        except OSError as e:
+            warns.append(f"无法读取上游文件 {rel}: {e}")
+            continue
+        if got != want:
+            warns.append(f"上游文件哈希不符 {rel}（本地 {got[:12]} / 期望 {want[:12]}）")
+    return warns
+
+
 def verify_payload(runtime: str = "") -> list[str]:
-    """校验 0.4.1 完整发布包，缺失或被改动的文件都会阻止部署。"""
+    """校验运行包完整性，缺失或被改动的文件都会阻止部署。"""
+    rt = runtime or DEFAULT_RUNTIME
+    if runtime_is_legacy(rt):
+        root, err = ensure_legacy_pack()
+        if not root:
+            return [err or tr('旧版兼容包无法使用')]
+        prefix = runtime_prefix(rt)
+        table = PAYLOAD_SHA256_BY_VERSION[LEGACY_UPSTREAM_VERSION]
+        required = [prefix + item[2] for item in ENTRIES]
+        return _check_payload_table(root, table, required)
+
     warns: list[str] = []
     src = payload_dir()
     if not src:
@@ -1964,23 +2355,8 @@ def verify_payload(runtime: str = "") -> list[str]:
         return [f"程序内置上游版本 {MOD_VERSION} 与清单版本 {UPSTREAM_VERSION} 不一致"]
     if UPSTREAM_ARCHIVE_SHA256 != "7230131637617ede9dc45c552244ddb814ae70098406e102fc254d52bcdb6e14":
         return ["程序内置上游包校验值异常"]
-    required = {INI_NAME, *(item[2] for item in ENTRIES), *GAME_SUPPORT_FILES}
-    for rel in sorted(required):
-        want = PAYLOAD_SHA256.get(rel)
-        if not want:
-            warns.append(f"内置清单缺少必要文件：{rel}")
-            continue
-        p = src / rel
-        if not p.is_file():
-            warns.append(f"缺少上游文件 {rel}")
-            continue
-        try:
-            got = sha256(p)
-        except OSError as e:
-            warns.append(f"无法读取上游文件 {rel}: {e}")
-            continue
-        if got != want:
-            warns.append(f"上游文件哈希不符 {rel}（本地 {got[:12]} / 期望 {want[:12]}）")
+    required = sorted({INI_NAME, *(item[2] for item in ENTRIES), *GAME_SUPPORT_FILES})
+    warns.extend(_check_payload_table(src, PAYLOAD_SHA256, required))
     return warns
 
 
@@ -2044,24 +2420,35 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
            runtime: str = "", tier: int = DEFAULT_TIER,
            engine: str = "DLSS", preset: str = "A",
            sr_mode: str = "Off") -> tuple[bool, list[str]]:
-    """部署上游 0.4.1 代理、运行库和配置，并记录可安全恢复的文件。"""
+    """部署所选上游的代理、运行库和配置，并记录可安全恢复的文件。"""
     logs: list[str] = []
     runtime = runtime or DEFAULT_RUNTIME
     if runtime not in [k for k, _p, _d in RUNTIMES]:
         return False, [tr('[错误] 未知运行库版本 {0}').format(runtime)]
+    legacy = runtime_is_legacy(runtime)
     engine_key = engine.strip().upper()
     if engine_key not in {"DLSS", "XESS"}:
         return False, [f"Unsupported frame-generation engine: {engine}"]
     engine = "XeSS" if engine_key == "XESS" else "DLSS"
+    if legacy and engine != "DLSS":
+        logs.append(tr('[提示] 0.3.5 兼容运行库只支持 DLSS-G，已忽略 XeSS-FG 选择。'))
+        engine = "DLSS"
     cap = runtime_mult_cap(runtime, engine)
     if int(mult or 2) > cap:
         logs.append(tr('[提示] {0} 上限为 {1}X，已钳制。').format(
             runtime_label(runtime), cap))
         mult = cap
 
+    want_tier = tier
     tier, tier_clamp = clamp_tier(tier, runtime)
     if tier_clamp == "invalid":
         logs.append(tr('[提示] 档位值非法，已按上游行为回退到档位 1。'))
+    elif tier_clamp == "runtime_cap":
+        logs.append(tr('[提示] {0} 只支持档位 0–1，已把档位 {1} 钳到 {2}。').format(
+            runtime_label(runtime), want_tier, tier))
+    if legacy:
+        logs.append(tr('[提示] 已选择上游 {0} 兼容运行库：单文件代理、运行库内嵌，'
+                       '不部署 dlssg_sm86/ 运行库目录。').format(LEGACY_UPSTREAM_VERSION))
     exe_dir = Path(game.exe_dir)
     if not exe_dir.is_dir():
         return False, [tr('[错误] 目录不存在：{0}').format(exe_dir)]
@@ -2069,9 +2456,15 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
     gpu = detect_gpu()
     driver_match = re.match(r"\s*(\d+)", gpu.driver or "")
     if driver_match and int(driver_match.group(1)) < 580:
-        return False, [tr('[错误] NVIDIA 驱动 {0} 低于上游要求 R580；已取消部署').format(gpu.driver)]
+        if not legacy:
+            return False, [tr('[错误] NVIDIA 驱动 {0} 低于上游要求 R580；已取消部署').format(gpu.driver)]
+        logs.append(tr('[提示] NVIDIA 驱动 {0} 低于上游 0.4.x 要求的 R580；'
+                       '0.3.5 兼容运行库不要求 R580，继续部署。').format(gpu.driver))
     if not driver_match:
-        logs.append(tr('[提示] 未能读取 NVIDIA 驱动版本；上游 0.4.x 要求 R580 或更新版本。'))
+        if legacy:
+            logs.append(tr('[提示] 未能读取 NVIDIA 驱动版本；0.3.5 兼容运行库不要求 R580。'))
+        else:
+            logs.append(tr('[提示] 未能读取 NVIDIA 驱动版本；上游 0.4.x 要求 R580 或更新版本。'))
 
     warns = verify_payload(runtime)
     if warns:
@@ -2103,9 +2496,17 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
     # 渲染路径代理互斥：dxgi 与 d3d12 只能留一个（上游 alternatives/README.md）
     if entry in RENDER_MUTEX:
         other = (RENDER_MUTEX - {entry}).pop()
-        if (exe_dir / other).exists():
-            return False, logs + [tr('[错误] {0} 与 {1} 不能同时存在；'
-                                     '请先移除另一个再部署。').format(entry, other)]
+        other_path = exe_dir / other
+        if other_path.exists():
+            is_project_proxy = False
+            if other_path.is_file() and not other_path.is_symlink():
+                try:
+                    is_project_proxy = sha256(other_path) in _all_known_hashes()
+                except OSError:
+                    pass
+            if not is_project_proxy:
+                return False, logs + [tr('[错误] {0} 与 {1} 不能同时存在；'
+                                         '请先移除另一个再部署。').format(entry, other)]
         logs.append(tr('[警告] {0} 位于 D3D12 渲染热路径，加载顺序敏感，'
                        '仅在工具类代理都不可用时使用。').format(entry))
 
@@ -2120,13 +2521,64 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
     ini_path = exe_dir / INI_NAME
     if ini_path.is_symlink() or (ini_path.exists() and not ini_path.is_file()):
         return False, logs + [f"配置目标不是普通文件，已停止以保护现有内容：{ini_path}"]
-    support_sources = [(rel, payload_dir() / rel) for rel in GAME_SUPPORT_FILES]
+
+    # A previous proxy from this project must not remain beside the newly
+    # selected one. Windows may load that older name first and keep running it,
+    # making a manual entry switch appear to have no effect. Leave unrelated
+    # DLLs untouched.
+    stale_entry_files: list[str] = []
+    known_proxy_hashes = _all_known_hashes()
+    for item in ENTRIES:
+        fname = item[1]
+        if fname == entry:
+            continue
+        candidate = exe_dir / fname
+        if candidate.is_symlink() or not candidate.is_file():
+            continue
+        try:
+            digest = sha256(candidate)
+        except OSError:
+            continue
+        recorded_owned = (old_managed.get(fname) == digest
+                          or (fname == _entry_filename(str(rec.get("entry") or ""))
+                              and rec.get("dll_sha256") == digest))
+        if recorded_owned or digest in known_proxy_hashes:
+            stale_entry_files.append(fname)
+
+    pack_root, pack_err = pack_dir(runtime)
+    if not pack_root:
+        return False, logs + [tr('[错误] {0}').format(pack_err)]
+    support_sources = [(rel, pack_root / rel) for rel in support_files_for(runtime)]
     file_sources = [(entry, src), *support_sources]
-    rels = [rel for rel, _ in file_sources] + [INI_NAME]
+
+    # Files this project wrote for an older deployment may not belong to the
+    # selected runtime — 0.4.x ships dlssg_sm86/*, while 0.3.5 embeds the
+    # runtime inside the proxy. Remove only files whose current hash still
+    # matches the recorded one, so user edits are preserved.
+    new_rels = {rel for rel, _source in file_sources}
+    stale_support_files: list[str] = []
+    for rel, digest in old_managed.items():
+        if rel in new_rels or not rel.startswith(LOG_DIR_NAME + "/"):
+            continue
+        rel_path = Path(rel)
+        if rel_path.is_absolute() or ".." in rel_path.parts:
+            continue
+        dest = exe_dir / rel_path
+        if dest.is_symlink() or not dest.is_file():
+            continue
+        try:
+            if not digest or sha256(dest) != digest:
+                continue
+        except OSError:
+            continue
+        stale_support_files.append(rel)
+
+    stale_files = stale_entry_files + stale_support_files
+    rels = [rel for rel, _ in file_sources] + stale_files + [INI_NAME]
     if len(set(rels)) != len(rels):
         return False, logs + ["上游运行包的部署路径重复，已取消部署。"]
 
-    for rel, _source in file_sources:
+    for rel in [*(rel for rel, _source in file_sources), *stale_files]:
         dest = exe_dir / Path(rel)
         if dest.is_symlink() or (dest.exists() and not dest.is_file()):
             return False, logs + [f"目标路径不是普通文件，已停止以保护现有内容：{dest}"]
@@ -2174,9 +2626,34 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
                 logs.append(tr('[备份] 原有 {0} → {1}').format(INI_NAME, file_backups[INI_NAME]))
 
         managed_files: dict[str, str] = {}
+
+        # Remove stale project files before writing the new set. They are
+        # included in the transaction snapshot above, so a later failure can
+        # restore them exactly. Original-file backups remain in state and are
+        # restored by the normal one-click restore flow.
+        for rel in stale_files:
+            dest = exe_dir / rel
+            if not dest.is_file() or dest.is_symlink():
+                continue
+            current_hash = sha256(dest)
+            recorded_owned = (old_managed.get(rel) == current_hash
+                              or (rel == _entry_filename(str(rec.get("entry") or ""))
+                                  and rec.get("dll_sha256") == current_hash))
+            if not recorded_owned and current_hash not in known_proxy_hashes:
+                continue
+            dest.unlink()
+            changed.append(rel)
+            logs.append(tr('[移除] {0}').format(rel))
+            # If the game originally shipped this file, put it back now instead
+            # of leaving a hole until the user clicks Restore.
+            original = file_backups.get(rel)
+            if original and Path(original).is_file():
+                _copy_atomic(Path(original), dest)
+                logs.append(tr('[还原] {0} ← 备份').format(rel))
+
         for rel, source in file_sources:
             dest = exe_dir / Path(rel)
-            want = PAYLOAD_SHA256[rel]
+            want = sha256(source)
             if not dest.is_file() or sha256(dest) != want:
                 _copy_atomic(source, dest)
                 changed.append(rel)
@@ -2201,7 +2678,8 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
             "name": game.name, "exe_dir": str(exe_dir), "exe": game.exe, "entry": entry,
             "dll_sha256": sha256(target), "ini_sha256": sha256(ini_path),
             "managed_files": managed_files, "file_backups": file_backups,
-            "installed_at": time.time(), "runtime": runtime, "engine": engine,
+            "installed_at": time.time(), "runtime": runtime,
+            "upstream": runtime_upstream(runtime), "engine": engine,
             "mult": mult, "level": level, "tier": tier, "preset": preset,
             "sr_mode": sr_mode, "source": game.source, "gpu_engine": game.engine,
             "dlssg": game.dlssg,
@@ -2215,11 +2693,23 @@ def deploy(game: Game, router: str, mult: int, bilinear: bool, level: int,
         logs.append(tr('[错误] 部署失败：{0}').format(e))
     else:
         shutil.rmtree(txn, ignore_errors=True)
-        logs.append(f"[配置] Engine={engine}, MaxGeneratedFrames={mult - 1}, "
-                    f"Preset={preset}, SuperResolution={sr_mode}, Optimized={tier}, Logging={level}")
-        logs.append(tr('[完成] 已启用（{0}，档位 {1}）。重启游戏后进入画面设置，打开“帧生成”并选择倍率；'
-                       '游戏支持动态插帧时最高可选 {2}X。').format(
-                           runtime_label(runtime), tier, cap))
+        if legacy:
+            # 0.3.5 不读 dlssg_sm86/ 下的运行库；把本次切回后已空掉的旧目录
+            # 一并清掉，避免残留文件被误认为仍在生效。logs 里有日志就保留。
+            prune_empty_dirs(exe_dir / LOG_DIR_NAME)
+        logs.append(f"[配置] Runtime={runtime} ({runtime_upstream(runtime)}), "
+                    f"Engine={engine}, MaxGeneratedFrames={mult - 1}, "
+                    f"Preset={'Auto' if legacy else preset}, "
+                    f"SuperResolution={'Off' if legacy else sr_mode}, "
+                    f"Optimized={tier}, Logging={level}")
+        if legacy:
+            logs.append(tr('[完成] 已启用（{0}，档位 {1}）。重启游戏后进入画面设置，'
+                           '打开“帧生成”并选择倍率；该运行库最高 {2}X。').format(
+                               runtime_label(runtime), tier, cap))
+        else:
+            logs.append(tr('[完成] 已启用（{0}，档位 {1}）。重启游戏后进入画面设置，打开“帧生成”并选择倍率；'
+                           '游戏支持动态插帧时最高可选 {2}X。').format(
+                               runtime_label(runtime), tier, cap))
         return True, logs
 
     # If any write or state save failed, roll back every target touched by this
@@ -2302,6 +2792,29 @@ def restore(game: Game) -> tuple[bool, list[str]]:
             logs.append(tr('[错误] 无法移除 {0}：{1}').format(rel, e))
             complete = False
 
+    # Older installs may have several project proxies but only one recorded
+    # in state. Remove any remaining known proxy names before restoring the
+    # original files from file_backups.
+    known_proxy_hashes = _all_known_hashes()
+    for item in ENTRIES:
+        fname = item[1]
+        target = exe_dir / fname
+        if not target.is_file() or target.is_symlink():
+            continue
+        try:
+            if sha256(target) not in known_proxy_hashes:
+                continue
+            target.unlink()
+            removed += 1
+            logs.append(tr('[移除] {0}').format(fname))
+        except OSError as e:
+            logs.append(tr('[错误] 无法移除 {0}：{1}').format(fname, e))
+            complete = False
+
+    # 0.3.5 不读 dlssg_sm86/ 运行库目录；移除本工具写入的文件后，
+    # 把空掉的旧目录树一并修剪（有日志或用户文件时保留）。
+    prune_empty_dirs(exe_dir / LOG_DIR_NAME)
+
     backup_root = (backups_dir() / key).resolve()
 
     def restore_backup(rel: str, backup: str) -> None:
@@ -2382,6 +2895,9 @@ def read_deployed_config(exe_dir: str) -> dict:
         cfg["Preset"] = cfg["DLSSG.Preset"]
     if "SuperResolution.Mode" in cfg:
         cfg["SRMode"] = cfg["SuperResolution.Mode"]
+    # 0.3.5 把预设放在 [Compatibility] Preset，且只有 Auto。
+    if "Preset" not in cfg and "Compatibility.Preset" in cfg:
+        cfg["Preset"] = cfg["Compatibility.Preset"]
     # Both the legacy [FrameGeneration] Optimized and 0.4.x [DLSSG] Optimized are supported.
     raw = cfg.get("DLSSG.Optimized") or cfg.get("Optimized") or cfg.get("OptimizedKernels")
     if raw is not None:
@@ -2417,6 +2933,11 @@ def _analyze_game_root(row: tuple[int, str, str, str], state_games: dict) -> tup
     game.entry = entry or (record or {}).get("entry", "")
     game.installed_at = (record or {}).get("installed_at", 0)
     game.config = read_deployed_config(best.exe_dir)
+    if record:
+        # 运行库版本不在 INI 里（旧格式没有该键），从部署状态回显。
+        game.config["__runtime__"] = record.get("runtime") or ""
+        game.config["__upstream__"] = record.get("upstream") or runtime_upstream(
+            record.get("runtime") or "")
     game.resolution = guess_resolution(best.exe_dir, name, best.exe)
     return index, game
 

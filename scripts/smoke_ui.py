@@ -310,6 +310,40 @@ def main() -> int:
         if not engine_line or engine_line[0] != f"Engine={engine}":
             fails.append(f"{engine}: Engine 配置未写入正确值")
 
+    print("\n=== 0.3.5 兼容运行库的界面联动 ===")
+    if win.cmb_runtime.count() != len(core.RUNTIMES):
+        fails.append(f"运行库下拉项数 {win.cmb_runtime.count()} != {len(core.RUNTIMES)}")
+    for rt in core.LEGACY_RUNTIMES:
+        idx = win.cmb_runtime.findData(rt)
+        if idx < 0:
+            fails.append(f"运行库下拉缺少 {rt}")
+            continue
+        win.cmb_runtime.setCurrentIndex(idx)
+        app.processEvents()
+        editable = [w for w in (win.cmb_engine, win.cmb_preset, win.cmb_sr) if w.isEnabled()]
+        if editable:
+            fails.append(f"{rt}: 0.4.x 独占选项仍可编辑（{len(editable)} 个）")
+        if (win._engine(), win._preset(), win._sr_mode()) != ("DLSS", "Auto", "Off"):
+            fails.append(f"{rt}: 引擎/预设/超分未强制为 DLSS/Auto/Off")
+        if win._tier_cap() != core.tier_cap(rt):
+            fails.append(f"{rt}: 档位上限 {win._tier_cap()} != {core.tier_cap(rt)}")
+        if win.seg_mult.group.buttons() and win._mult() > core.runtime_mult_cap(rt, "DLSS"):
+            fails.append(f"{rt}: 倍率 {win._mult()} 超过上限")
+        txt = core.build_ini("SM86", 6, False, 1, 3, rt)
+        for token in ("[Compatibility]", "Preset=Auto", "Mode=Bundled"):
+            if token not in txt:
+                fails.append(f"{rt}: 旧格式 INI 缺少 {token}")
+        cap = core.runtime_mult_cap(rt, "DLSS")
+        if f"MaxGeneratedFrames={cap - 1}" not in txt:
+            fails.append(f"{rt}: MaxGeneratedFrames 未按上限 {cap} 写入")
+        print(f"  {rt}: 选项已收起、倍率上限 {core.runtime_mult_cap(rt, 'DLSS')}X、"
+              f"档位上限 {core.tier_cap(rt)}、INI 旧格式 OK")
+    back = win.cmb_runtime.findData(core.DEFAULT_RUNTIME)
+    win.cmb_runtime.setCurrentIndex(back)
+    app.processEvents()
+    if not (win.cmb_engine.isEnabled() and win.cmb_sr.isEnabled()):
+        fails.append("切回 310.9.16 后选项未恢复可编辑")
+
     print("\n=== 启动动画缓存与缩放 ===")
     splash = ui.Splash(embedded=True)
     for width, height in ((1160, 840), (780, 520), (1440, 900)):
@@ -462,6 +496,37 @@ def main() -> int:
         print("  反作弊提示: 仅日志/徽标提示，部署说明不再限制使用场景 OK")
     else:
         fails.append("部署说明仍包含反作弊限制")
+
+    print("\n=== 显卡设备待重启状态与重启路径 ===")
+    info = core.detect_gpu_mask(force=True)
+    inst = info.enum_key.split("Enum\\", 1)[-1] if info.enum_key else ""
+    status = core._devnode_status(inst)
+    needs = core.gpu_device_needs_reboot()
+    if status is None:
+        print("  未取到设备节点状态，跳过（非 Windows 或无 NVIDIA 设备）")
+    else:
+        if needs != bool(status[0] & core.DN_NEED_RESTART):
+            fails.append("gpu_device_needs_reboot 与设备节点状态不一致")
+        print(f"  设备节点 status=0x{status[0]:08X} problem={status[1]} 待重启={needs}")
+        if not hasattr(win, "btn_mask_reboot"):
+            fails.append("缺少「重启电脑」按钮")
+        else:
+            if (not win.btn_mask_reboot.isHidden()) != needs:
+                fails.append("「重启电脑」按钮可见性与待重启状态不一致")
+            if win.btn_mask_restart.isEnabled() == needs:
+                fails.append("待重启时「重启显卡」应停用")
+            if needs and core.is_admin() and "重启电脑" not in win.mask_desc.text():
+                fails.append("待重启时伪装说明未提示重启电脑")
+
+    if not core.is_admin():
+        ok, msg = core.restart_gpu_device()
+        print(f"  非管理员调用 restart_gpu_device -> ok={ok} msg={msg!r}")
+        if ok:
+            fails.append("非管理员时重启显卡不应返回成功")
+        ok, msg = core.schedule_reboot(60)
+        if ok:
+            fails.append("非管理员时不应能安排重启")
+        print(f"  非管理员调用 schedule_reboot -> ok={ok}")
 
     print("\n=== 结果 ===")
     if fails:

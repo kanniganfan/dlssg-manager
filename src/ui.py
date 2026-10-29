@@ -1944,6 +1944,17 @@ class MainWindow(QWidget):
         self.btn_mask_restart.clicked.connect(self.restart_gpu)
         lay.addWidget(self.btn_mask_restart, 0)
 
+        # 系统已把设备标记为「等待重启」时，就地重启必然失败，只显示这个按钮
+        self.btn_mask_reboot = QPushButton(tr('重启电脑'))
+        self.btn_mask_reboot.setObjectName("ghost")
+        self.btn_mask_reboot.setFixedHeight(32)
+        self.btn_mask_reboot.setCursor(Qt.PointingHandCursor)
+        self.btn_mask_reboot.setToolTip(
+            tr('系统已要求重启才能完成显卡配置；点击后 60 秒重启，可用 shutdown /a 取消'))
+        self.btn_mask_reboot.clicked.connect(self.reboot_pc)
+        self.btn_mask_reboot.setVisible(False)
+        lay.addWidget(self.btn_mask_reboot, 0)
+
         self._refresh_mask()
         return card
 
@@ -1956,13 +1967,23 @@ class MainWindow(QWidget):
             self.mask_desc.setText(tr('本机不满足条件：{0}').format(info.reason))
             self.btn_mask_apply.setEnabled(False)
             self.btn_mask_restore.setEnabled(False)
+            self.btn_mask_reboot.setVisible(False)
             return
+
+        self.mask_needs_reboot = core.gpu_device_needs_reboot()
+        self.btn_mask_reboot.setVisible(self.mask_needs_reboot)
+        self.btn_mask_restart.setEnabled(not self.mask_needs_reboot)
 
         if info.masked:
             self.mask_pill.set_kind(tr('已伪装'), "warn")
-            self.mask_desc.setText(
-                tr('{0}（原 {1}）· 点「重启显卡」立即生效')
-                .format(info.current, info.original))
+            if self.mask_needs_reboot:
+                self.mask_desc.setText(
+                    tr('{0}（原 {1}）· 需重启电脑后生效')
+                    .format(info.current, info.original))
+            else:
+                self.mask_desc.setText(
+                    tr('{0}（原 {1}）· 点「重启显卡」立即生效')
+                    .format(info.current, info.original))
         else:
             self.mask_pill.set_kind(tr('未伪装'), "muted")
             self.mask_desc.setText(tr('当前：{0}').format(info.current or tr('未知')))
@@ -2012,10 +2033,26 @@ class MainWindow(QWidget):
 
     def restart_gpu(self) -> None:
         """重启显卡设备，让名称改动对游戏（DXGI）立即生效。"""
+        if core.gpu_device_needs_reboot():
+            self.reboot_pc()
+            return
         ok, msg = core.restart_gpu_device()
         self._log((tr('[完成] {0}') if ok else tr('[错误] {0}')).format(msg))
         self.toast_msg(msg, "ok" if ok else "bad")
         self._refresh_mask()
+
+    def reboot_pc(self) -> None:
+        """设备已被系统标记「等待重启」时，确认后安排重启电脑。"""
+        answer = QMessageBox.question(
+            self, tr('重启电脑'),
+            tr('显卡设备已被系统标记为「等待重启」，重启显卡无法完成配置。现在重启电脑吗？60 秒后重启，期间可用 shutdown /a 取消。'),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        ok, msg = core.schedule_reboot(60)
+        self._log((tr('[完成] {0}') if ok else tr('[错误] {0}')).format(msg))
+        self.toast_msg(msg, "ok" if ok else "bad")
 
     # ------------------------------------------------- 系统准备（HAGS）
 
@@ -2342,7 +2379,8 @@ class MainWindow(QWidget):
         self.cmb_runtime.setMinimumWidth(150)
         self.cmb_runtime.setMaximumWidth(280)
         self.cmb_runtime.setToolTip(
-            tr('上游 0.4.1 使用 310.9.16 配套运行库；新版不再提供 310.1。'))
+            tr('上游 0.4.1 使用 310.9.16 配套运行库；0.3.5 兼容项提供 310.9 / 310.1，'
+               '可在新版本无法进入游戏时回退。'))
         self.cmb_runtime.currentIndexChanged.connect(lambda _i: self._on_runtime_changed())
         r1.add(self.cmb_runtime)
         b = QLabel(tr('入口 DLL'))
@@ -2508,6 +2546,21 @@ class MainWindow(QWidget):
         """Refresh the preset / super-resolution explanation (tooltips + inline label)."""
         preset_text = ""
         sr_text = ""
+        if core.runtime_is_legacy(self._runtime()):
+            note = tr('上游 0.3.5 兼容运行库只使用 DLSS-G + Auto 预设，'
+                      '不提供预设 A/B/C、DLSS 超分与 XeSS-FG；切回 310.9.16 后恢复。')
+            if hasattr(self, "cmb_engine"):
+                self.cmb_engine.setToolTip(note)
+            if hasattr(self, "cmb_preset"):
+                self.cmb_preset.setToolTip(note)
+            if hasattr(self, "cmb_sr"):
+                self.cmb_sr.setToolTip(note)
+            if hasattr(self, "lb_option_hint"):
+                self.lb_option_hint.setText(note)
+            return
+        if hasattr(self, "cmb_engine"):
+            self.cmb_engine.setToolTip(
+                tr('DLSS-G 是默认引擎；XeSS-FG 提供 2X–4X 插帧，兼容性与性能因游戏而异。'))
         if hasattr(self, "cmb_preset"):
             value = str(self.cmb_preset.currentData() or "A")
             preset_text = tr(self._preset_help.get(value, self._preset_help["A"]))
@@ -2754,11 +2807,20 @@ class MainWindow(QWidget):
         self.kv_ac.set(tr('已检测到') if g.anticheat else tr('未检测到'))
         cfg = g.config or {}
         if g.deployed:
+            rt = str(cfg.get("__runtime__") or "")
+            if rt:
+                idx = self.cmb_runtime.findData(rt)
+                if idx >= 0:
+                    # 先回显运行库：它会重建倍率/档位段并收起 0.3.5 不支持的选项。
+                    self.cmb_runtime.setCurrentIndex(idx)
+            legacy = core.runtime_is_legacy(self._runtime())
             for widget, key, fallback in (
                 (self.cmb_engine, "Engine", "DLSS"),
                 (self.cmb_preset, "Preset", "A"),
                 (self.cmb_sr, "SRMode", "Off"),
             ):
+                if legacy and widget in (self.cmb_preset, self.cmb_sr):
+                    continue
                 idx = widget.findData(cfg.get(key, fallback))
                 widget.setCurrentIndex(max(0, idx))
             self._on_engine_changed()
@@ -2769,8 +2831,11 @@ class MainWindow(QWidget):
         else:
             self.kv_vram.set(tr('按最终输出分辨率预留 300–800 MiB'))
         if g.deployed:
-            if cfg:
-                self.kv_state.set(tr('已部署 {0}（Router={1}）').format(g.entry, cfg.get('Router', '?')))
+            if cfg.get("Router"):
+                self.kv_state.set(tr('已部署 {0}（Router={1}）').format(g.entry, cfg.get('Router')))
+            elif core.runtime_is_legacy(self._runtime()):
+                self.kv_state.set(tr('已部署 {0}（{1}）').format(
+                    g.entry, core.runtime_label(self._runtime())))
             else:
                 self.kv_state.set(tr('已部署 {0}').format(g.entry))
             # MaxGeneratedFrames 新旧格式同名，兼容读取
@@ -2802,12 +2867,18 @@ class MainWindow(QWidget):
         return rt or core.DEFAULT_RUNTIME
 
     def _engine(self) -> str:
+        if core.runtime_is_legacy(self._runtime()):
+            return "DLSS"
         return (self.cmb_engine.currentData() or "DLSS") if hasattr(self, "cmb_engine") else "DLSS"
 
     def _preset(self) -> str:
+        if core.runtime_is_legacy(self._runtime()):
+            return "Auto"          # 0.3.5 只有 Auto，由上游自行决定
         return (self.cmb_preset.currentData() or "A") if hasattr(self, "cmb_preset") else "A"
 
     def _sr_mode(self) -> str:
+        if core.runtime_is_legacy(self._runtime()):
+            return "Off"           # 0.3.5 不支持 0.4.x 的超分模式
         return (self.cmb_sr.currentData() or "Off") if hasattr(self, "cmb_sr") else "Off"
 
     def _fill_entry_combo(self) -> None:
@@ -2824,14 +2895,35 @@ class MainWindow(QWidget):
         self.cmb_entry.setCurrentIndex(max(0, idx))
 
     def _on_runtime_changed(self) -> None:
-        """运行库更新后刷新倍率和一致性档位。"""
+        """切换运行库：隐藏 0.4.x 独占选项，并刷新倍率 / 档位上限。"""
+        legacy = core.runtime_is_legacy(self._runtime())
+        if hasattr(self, "cmb_engine"):
+            if legacy:
+                idx = self.cmb_engine.findData("DLSS")
+                if idx >= 0:
+                    self.cmb_engine.setCurrentIndex(idx)
+            self.cmb_engine.setEnabled(not legacy)
+        if hasattr(self, "cmb_preset"):
+            if legacy:
+                idx = self.cmb_preset.findData("A")
+                if idx >= 0:
+                    self.cmb_preset.setCurrentIndex(idx)
+            self.cmb_preset.setEnabled(not legacy and self._engine().upper() == "DLSS")
+        if hasattr(self, "cmb_sr"):
+            if legacy:
+                idx = self.cmb_sr.findData("Off")
+                if idx >= 0:
+                    self.cmb_sr.setCurrentIndex(idx)
+            self.cmb_sr.setEnabled(not legacy)
+        self._update_option_tooltips()
         self._refresh_mult_seg()
         self._refresh_tier_seg()
         self._update_vram()
 
     def _on_engine_changed(self) -> None:
         if hasattr(self, "cmb_preset"):
-            self.cmb_preset.setEnabled(self._engine().upper() == "DLSS")
+            self.cmb_preset.setEnabled(
+                not core.runtime_is_legacy(self._runtime()) and self._engine().upper() == "DLSS")
         self._refresh_mult_seg()
         self._update_vram()
 

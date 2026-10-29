@@ -1,15 +1,15 @@
 @echo off
 rem ============================================================
 rem  DLSSG Manager - Windows 一键构建脚本
-rem  产物: dist\1.9.3\DLSSG Manager.exe + payload\ 便携发行包
+rem  产物: dist\1.9.6\DLSSG Manager.exe + payload\ 便携发行包
 rem ============================================================
 setlocal
 cd /d "%~dp0.."
 
 set "VENV=%CD%\.venv"
 set "PY=%VENV%\Scripts\python.exe"
-set "BUILD_DIR=%CD%\build\1.9.3"
-set "DIST_DIR=%CD%\dist\1.9.3"
+set "BUILD_DIR=%CD%\build\1.9.6"
+set "DIST_DIR=%CD%\dist\1.9.6"
 
 if exist "%BUILD_DIR%" (
     echo [错误] 构建目录已存在，为保护其中内容而停止: %BUILD_DIR%

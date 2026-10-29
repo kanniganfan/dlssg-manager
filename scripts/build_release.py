@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DLSSG Manager 发行构建：组装暂存目录 → 便携包 → NSIS 安装器。
 
-用法: python build_release.py [--version 1.9.3] [--portable-only]
+用法: python build_release.py [--version 1.9.6] [--portable-only]
 
 关键点（踩过的坑）:
 - LICENSE 转 UTF-16LE **带 BOM** 给 NSIS 许可证页 —— 无 BOM 的 UTF-8 会被
@@ -21,8 +21,8 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DIST = ROOT / "dist" / "1.9.3"
-STAGE = ROOT / "build" / "release-stage" / "1.9.3"
+DIST = ROOT / "dist" / "1.9.6"
+STAGE = ROOT / "build" / "release-stage" / "1.9.6"
 NSIS = ROOT / "_tools" / "nsis-3.10" / "makensis.exe"
 PUB = ROOT
 
@@ -103,7 +103,7 @@ def build_installer(version: str) -> Path:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--version", default="1.9.3")
+    ap.add_argument("--version", default="1.9.6")
     ap.add_argument("--keep-stage", action="store_true")
     ap.add_argument("--portable-only", action="store_true",
                     help="只生成便携 ZIP，不需要 NSIS")
