@@ -6,7 +6,7 @@
 
 简体中文 · 繁體中文 · English
 
-[![Release](https://img.shields.io/badge/Release-v1.9.3-5B8CFF)](#下载与安装)
+[![Release](https://img.shields.io/badge/Release-v1.9.6-5B8CFF)](#下载与安装)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-333D52)](#下载与安装)
 [![Upstream](https://img.shields.io/badge/Upstream-dlssg__for__sm86-9B7BFF)](#致谢与出处)
 
@@ -37,6 +37,8 @@
   往往直接决定某些游戏能不能正常开起来。
 
 如果你发现上游已更新而本工具尚未跟进，欢迎提 issue 提醒。
+
+各版本改动汇总见 [CHANGELOG.md](CHANGELOG.md)。
 
 DLSS 与 DLSS Frame Generation 是 NVIDIA Corporation 的商标与专有技术。上游 0.4.1 运行包按官方发布原样分发，
 包含 NVIDIA 与 Intel 第三方二进制；授权和来源见 `payload/THIRD_PARTY_NOTICES.txt`，本工具不修改这些文件。
