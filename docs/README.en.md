@@ -6,7 +6,7 @@
 
 [简体中文](../README.md) · [繁體中文](README.zh-TW.md) · **English**
 
-[![Release](https://img.shields.io/badge/Release-v1.9.6-5B8CFF)](#download-and-install)
+[![Release](https://img.shields.io/badge/Release-v1.9.7-5B8CFF)](#download-and-install)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-333D52)](#download-and-install)
 [![Upstream](https://img.shields.io/badge/Upstream-dlssg__for__sm86-9B7BFF)](#acknowledgements)
 
@@ -131,12 +131,12 @@ cards can enable **frame generation** in games that already support DLSS.
 
 ## Download and install
 
-Go to the [**Releases**](../../releases) page and download the build you want (current **v1.9.6**):
+Go to the [**Releases**](../../releases) page and download the build you want (current **v1.9.7**):
 
 | Edition | File | Who it is for |
 |---|---|---|
-| **Portable** | `DLSSG_Manager_1.9.6_portable_x64.zip` | Unzip and run, writes nothing to the registry |
-| **Installer** | `DLSSG_Manager_1.9.6_setup_x64.exe` | Wants a setup wizard, Start menu / desktop shortcuts and a full uninstall |
+| **Portable** | `DLSSG_Manager_1.9.7_portable_x64.zip` | Unzip and run, writes nothing to the registry |
+| **Installer** | `DLSSG_Manager_1.9.7_setup_x64.exe` | Wants a setup wizard, Start menu / desktop shortcuts and a full uninstall |
 
 **Portable**: extract to any folder and double-click `DLSSG Manager.exe`.
 **Installer**: run the setup, pick a folder; to uninstall use "Settings → Apps → Installed apps" or the

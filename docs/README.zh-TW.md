@@ -6,7 +6,7 @@
 
 [简体中文](../README.md) · **繁體中文** · [English](README.en.md)
 
-[![Release](https://img.shields.io/badge/Release-v1.9.6-5B8CFF)](#下載與安裝)
+[![Release](https://img.shields.io/badge/Release-v1.9.7-5B8CFF)](#下載與安裝)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20x64-333D52)](#下載與安裝)
 [![Upstream](https://img.shields.io/badge/Upstream-dlssg__for__sm86-9B7BFF)](#致謝與出處)
 
@@ -130,12 +130,12 @@ DLSSG Manager 自動掃描本機已安裝的 D3D12 遊戲，定位真正的算�
 
 ## 下載與安裝
 
-前往 [**Releases**](../../releases) 頁面下載對應版本（目前 **v1.9.6**）：
+前往 [**Releases**](../../releases) 頁面下載對應版本（目前 **v1.9.7**）：
 
 | 版本 | 檔案 | 適合對象 |
 |---|---|---|
-| **免安裝可攜版** | `DLSSG_Manager_1.9.6_portable_x64.zip` | 想解壓即用、綠色不寫登錄檔 |
-| **標準安裝版** | `DLSSG_Manager_1.9.6_setup_x64.exe` | 想要安裝精靈、開始功能表/桌面捷徑與完整解除安裝 |
+| **免安裝可攜版** | `DLSSG_Manager_1.9.7_portable_x64.zip` | 想解壓即用、綠色不寫登錄檔 |
+| **標準安裝版** | `DLSSG_Manager_1.9.7_setup_x64.exe` | 想要安裝精靈、開始功能表/桌面捷徑與完整解除安裝 |
 
 **可攜版**：解壓到任意目錄，雙擊 `DLSSG Manager.exe` 即可。
 **安裝版**：雙擊 setup，依精靈選擇目錄安裝；解除安裝請到「設定 → 應用程式 → 已安裝的應用程式」或

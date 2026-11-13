@@ -37,7 +37,7 @@ from upstream_payload import (
 )
 
 APP_NAME = "DLSSG Manager"
-APP_VERSION = "1.9.6"
+APP_VERSION = "1.9.7"
 APP_TITLE = f"{APP_NAME} {APP_VERSION}"
 
 # 界面缩放：由用户在标题栏选择，持久化到 state.json，启动时通过
