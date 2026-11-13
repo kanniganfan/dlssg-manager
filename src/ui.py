@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QCom
                                QMessageBox, QPushButton, QScrollArea, QSizeGrip, QSizePolicy, QStackedWidget,
                                QStyledItemDelegate, QStyle, QVBoxLayout, QWidget, QLayout, QLayoutItem)
 
+import anr_deploy
 import anr_profile
 import core
 import i18n
@@ -2573,6 +2574,23 @@ class MainWindow(QWidget):
         self.btn_restore.setMinimumHeight(34)
         self.btn_restore.clicked.connect(self.do_restore)
         actions.add(self.btn_restore)
+        self.btn_anr_deploy = QPushButton("部署 ANR（实验）")
+        self.btn_anr_deploy.setObjectName("ghost")
+        self.btn_anr_deploy.setCursor(Qt.PointingHandCursor)
+        self.btn_anr_deploy.setMinimumHeight(34)
+        self.btn_anr_deploy.setToolTip("把 ANR FG 平铺部署进该游戏目录（会先备份同名文件）")
+        self.btn_anr_deploy.clicked.connect(self.do_anr_deploy)
+        actions.add(self.btn_anr_deploy)
+        self.btn_anr_restore = QPushButton("还原 ANR")
+        self.btn_anr_restore.setObjectName("ghost")
+        self.btn_anr_restore.setCursor(Qt.PointingHandCursor)
+        self.btn_anr_restore.setMinimumHeight(34)
+        self.btn_anr_restore.clicked.connect(self.do_anr_restore)
+        actions.add(self.btn_anr_restore)
+        has_anr_source = anr_deploy.default_source_dir(Path(__file__).resolve().parents[1]) is not None
+        self.btn_anr_deploy.setVisible(has_anr_source)
+        self.btn_anr_restore.setVisible(has_anr_source)
+
         self.btn_open = QPushButton(tr('打开目录'))
         self.btn_open.setObjectName("ghost")
         self.btn_open.setCursor(Qt.PointingHandCursor)
@@ -3010,6 +3028,83 @@ class MainWindow(QWidget):
         self.seg_anr_mult.set_value(max(0, min(4, profile.mult - anr_profile.MULT_MIN)))
         self.sw_anr_cut.setChecked(profile.scene_cut)
         self.ed_anr_nits.setText(str(profile.nits_per_unit))
+
+        # 用官方 size_table 推荐路径与允许倍率（读不到表就保持原样）
+        rec = None
+        try:
+            width, height = game.resolution if game else (0, 0)
+            rec = anr_profile.recommend(install.plugin_dir, getattr(self.gpu, "name", ""), width, height)
+        except Exception:
+            rec = None
+        if rec is not None:
+            self.lb_anr_note.setText(f"ANR FG：官方建议 {rec.text}；改完需重启游戏生效。")
+            for i in range(anr_profile.MULT_MAX - anr_profile.MULT_MIN + 1):
+                mult = anr_profile.MULT_MIN + i
+                button = self.seg_anr_mult.group.button(i)
+                if button is not None:
+                    button.setEnabled(rec.mult_min <= mult <= rec.mult_max)
+        else:
+            self.lb_anr_note.setText("ANR FG：改完需重启游戏生效。")
+            for i in range(anr_profile.MULT_MAX - anr_profile.MULT_MIN + 1):
+                button = self.seg_anr_mult.group.button(i)
+                if button is not None:
+                    button.setEnabled(True)
+
+    def do_anr_deploy(self) -> None:
+        """把 ANR 平铺部署到当前游戏（先备份同名文件，记录进 state）。"""
+        game = self.current
+        if game is None:
+            return
+        root = Path(__file__).resolve().parents[1]
+        source = anr_deploy.default_source_dir(root)
+        if source is None:
+            self._log("[错误] 没有可用的 ANR 源目录")
+            return
+        state = core.load_state()
+        if (state.get("anr") or {}).get(game.gid):
+            self.toast_msg("该游戏已部署 ANR，请先还原", "bad")
+            return
+        if (state.get("games") or {}).get(game.gid):
+            self.toast_msg("请先一键恢复 DLSSG，再部署 ANR（两套代理不能共存）", "bad")
+            return
+        try:
+            record = anr_deploy.deploy(game.exe_dir, source, core.backups_dir())
+        except Exception as exc:
+            self._log(f"[错误] 部署 ANR 失败：{exc}")
+            self.toast_msg("部署 ANR 失败，详见日志", "bad")
+            return
+        state.setdefault("anr", {})[game.gid] = record
+        try:
+            core.save_state(state)
+        except Exception as exc:
+            self._log(f"[错误] 保存部署记录失败：{exc}")
+        self._log(f"[提示] 已部署 ANR 到 {game.exe_dir}（{len(record['files'])} 个文件）")
+        self.toast_msg("ANR 已部署，进游戏开启帧生成试试", "ok")
+
+    def do_anr_restore(self) -> None:
+        """按记录还原 ANR 部署。"""
+        game = self.current
+        if game is None:
+            return
+        state = core.load_state()
+        record = (state.get("anr") or {}).get(game.gid)
+        if not record:
+            self.toast_msg("这个游戏没有本工具部署过的 ANR", "bad")
+            return
+        try:
+            log_lines = anr_deploy.restore(game.exe_dir, record)
+        except Exception as exc:
+            self._log(f"[错误] 还原 ANR 失败：{exc}")
+            self.toast_msg("还原 ANR 失败，详见日志", "bad")
+            return
+        state["anr"].pop(game.gid, None)
+        try:
+            core.save_state(state)
+        except Exception:
+            pass
+        for line in log_lines[:12]:
+            self._log(f"[ANR] {line}")
+        self.toast_msg("ANR 已还原", "ok")
 
     def apply_anr(self) -> None:
         """把界面上的 ANR 设置写回游戏目录里的 nr_fg.ini。"""

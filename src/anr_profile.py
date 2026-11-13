@@ -222,3 +222,103 @@ def detect_install(game_exe_dir) -> AnrInstall | None:
         if candidate.is_file():
             return AnrInstall(ini_path=candidate, layout=layout)
     return None
+
+
+# ---------------------------------------------------------------- 官方数据表
+# ANR 自带两张表：path_table.json（厂商/架构 → 卷积路径）、size_table.json
+# （架构 × 分辨率 → 推荐路径 + 允许倍率区间，并标明实测还是预测）。
+# 这里只读它们，用来在界面上给出「你的卡该用哪条路径、能不能开这个倍率」。
+
+SIZE_CLASSES = (("1080p", 2073600), ("1440p", 3686400), ("2160p", 0))
+
+# 显卡名 → (厂商, 架构)，与官方 path_table.json 里的 architectures 对齐。
+_GPU_HINTS = (
+    (r"rtx\s*50\d0", "nvidia", "blackwell"),
+    (r"rtx\s*40\d0", "nvidia", "ada"),
+    (r"rtx\s*30\d0", "nvidia", "ampere"),
+    (r"rtx\s*20\d0", "nvidia", "turing"),
+    (r"gtx\s*16\d0", "nvidia", "turing"),
+    (r"rx\s*9\d{3}", "amd", "rdna4"),
+    (r"rx\s*7\d{3}", "amd", "rdna3"),
+    (r"rx\s*6\d{3}", "amd", "rdna2"),
+    (r"steam\s*deck", "amd", "rdna2-steam-deck"),
+)
+
+
+@dataclass(frozen=True)
+class Recommendation:
+    """针对某块显卡 + 某个输出分辨率给出的建议。"""
+
+    vendor: str
+    architecture: str
+    path: str
+    mult_min: int
+    mult_max: int
+    source: str = ""          # measured / prediction
+    note: str = ""
+
+    @property
+    def text(self) -> str:
+        span = f"{self.mult_min}X–{self.mult_max}X" if self.mult_min != self.mult_max else f"{self.mult_min}X"
+        flag = "实测" if self.source == "measured" else ("预测" if self.source == "prediction" else "")
+        return f"{self.path}｜{span}｜{self.architecture}" + (f"（{flag}）" if flag else "")
+
+
+def gpu_arch(gpu_name: str) -> tuple[str, str] | None:
+    """把显卡名映射成 (厂商, 架构)；认不出来就返回 None。"""
+    import re as _re
+    text = (gpu_name or "").lower()
+    for pattern, vendor, arch in _GPU_HINTS:
+        if _re.search(pattern, text):
+            return vendor, arch
+    return None
+
+
+def size_class(width: int, height: int) -> str:
+    pixels = max(0, int(width)) * max(0, int(height))
+    for name, limit in SIZE_CLASSES:
+        if limit == 0 or pixels <= limit:
+            return name
+    return SIZE_CLASSES[-1][0]
+
+
+def read_tables(plugin_dir) -> dict:
+    """读官方两张表；文件缺失或坏了就返回空字典（界面据此降级）。"""
+    import json as _json
+
+    base = Path(plugin_dir)
+    tables: dict = {}
+    for name in ("path_table.json", "size_table.json"):
+        try:
+            tables[name] = _json.loads((base / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            tables[name] = {}
+    return tables
+
+
+def recommend(plugin_dir, gpu_name: str, width: int, height: int) -> Recommendation | None:
+    """按官方 size_table 推荐路径与倍率区间；没有数据就返回 None。"""
+    arch_pair = gpu_arch(gpu_name)
+    if arch_pair is None:
+        return None
+    vendor, arch = arch_pair
+    tables = read_tables(plugin_dir)
+    sizes = tables.get("size_table.json") or {}
+    cls = size_class(width, height)
+
+    fallback: Recommendation | None = None
+    for entry in sizes.get("entries", []):
+        if entry.get("vendor") != vendor or entry.get("architecture") != arch:
+            continue
+        path = str(entry.get("path") or DEFAULT_PATH)
+        source = str(entry.get("source") or "")
+        windows = (entry.get("large") or {})
+        span = windows.get(cls) or (windows.get("2160p") or windows.get("1440p") or windows.get("1080p"))
+        if not span:
+            continue
+        lo, hi = int(span[0]), int(span[1])
+        rec = Recommendation(vendor, arch, path, lo, hi, source, cls)
+        if windows.get(cls):
+            return rec
+        fallback = fallback or rec
+    return fallback
