@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QCom
                                QMessageBox, QPushButton, QScrollArea, QSizeGrip, QSizePolicy, QStackedWidget,
                                QStyledItemDelegate, QStyle, QVBoxLayout, QWidget, QLayout, QLayoutItem)
 
+import anr_profile
 import core
 import i18n
 from i18n import tr
@@ -2501,6 +2502,60 @@ class MainWindow(QWidget):
         r3.add(self.seg_tier)
         cl.addWidget(r3)
         cl.addWidget(self.lb_tier)
+
+        # ---- ANR FG（Apex Neural Rendering）：只有该游戏目录里已经装了 ANR 才显示。
+        # TODO(i18n): 这批实验性文案暂未进 gen_i18n_catalog.py，PR2（部署）时统一处理。
+        self.row_anr = FlowRow(h_spacing=10, v_spacing=6)
+        anr_path_label = QLabel("ANR 路径")
+        anr_path_label.setObjectName("kv")
+        anr_path_label.setToolTip("ANR 的卷积路径；自动会按显卡挑最优，卡顿时再手动指定。")
+        self.row_anr.add(anr_path_label)
+        self.cmb_anr_path = HelpCombo(popup_width=420)
+        for value in anr_profile.PATHS:
+            index = self.cmb_anr_path.count()
+            self.cmb_anr_path.addItem(value, value)
+            self.cmb_anr_path.setItemData(index, anr_profile.PATH_LABELS[value], Qt.ToolTipRole)
+        self.cmb_anr_path.set_help({v: anr_profile.PATH_LABELS[v] for v in anr_profile.PATHS},
+                                   popup_width=420)
+        self.cmb_anr_path.setMinimumWidth(150)
+        self.row_anr.add(self.cmb_anr_path)
+
+        anr_mult_label = QLabel("ANR 倍率")
+        anr_mult_label.setObjectName("kv")
+        self.row_anr.add(anr_mult_label)
+        self.seg_anr_mult = Segmented(["2X", "3X", "4X", "5X", "6X"], 4)
+        self.row_anr.add(self.seg_anr_mult)
+
+        anr_cut_label = QLabel("场景切换")
+        anr_cut_label.setObjectName("kv")
+        anr_cut_label.setToolTip("开启后不在镜头切换处插帧，避免糊帧。")
+        self.row_anr.add(anr_cut_label)
+        self.sw_anr_cut = Switch(True)
+        self.row_anr.add(self.sw_anr_cut)
+
+        anr_nits_label = QLabel("HDR 亮度")
+        anr_nits_label.setObjectName("kv")
+        anr_nits_label.setToolTip("HDR10 下模型线性 1.0 对应的显示亮度（nit），默认 80。")
+        self.row_anr.add(anr_nits_label)
+        self.ed_anr_nits = QLineEdit(str(anr_profile.NITS_DEFAULT))
+        self.ed_anr_nits.setFixedWidth(70)
+        self.row_anr.add(self.ed_anr_nits)
+
+        self.btn_anr_apply = QPushButton("写入 ANR 配置")
+        self.btn_anr_apply.setObjectName("ghost")
+        self.btn_anr_apply.setCursor(Qt.PointingHandCursor)
+        self.btn_anr_apply.setMinimumHeight(30)
+        self.btn_anr_apply.clicked.connect(self.apply_anr)
+        self.row_anr.add(self.btn_anr_apply)
+        cl.addWidget(self.row_anr)
+
+        self.lb_anr_note = QLabel("ANR FG：改完需重启游戏生效。")
+        self.lb_anr_note.setObjectName("kv")
+        cl.addWidget(self.lb_anr_note)
+        self.row_anr.setVisible(False)
+        self.lb_anr_note.setVisible(False)
+        self._anr_install = None
+
         lay.addWidget(cfg)
 
         # 操作按钮：窄宽时自动换行；主按钮给足最小宽度保证可点。
@@ -2824,6 +2879,8 @@ class MainWindow(QWidget):
                 idx = widget.findData(cfg.get(key, fallback))
                 widget.setCurrentIndex(max(0, idx))
             self._on_engine_changed()
+        self._sync_anr_block(g)
+
         mult = self._mult()
         res = core.vram_hint(w, h, mult) if w else None
         if res and res[0]:
@@ -2937,6 +2994,47 @@ class MainWindow(QWidget):
             want = 4                          # 首次构建：对齐上游出厂 4X
         want = max(2, min(want, cap))
         self.seg_mult.set_options(labels, current=want - 2)
+
+    def _sync_anr_block(self, game) -> None:
+        """按当前游戏回显 ANR 设置；没装 ANR 就把整块藏起来。"""
+        install = anr_profile.detect_install(game.exe_dir) if game else None
+        self._anr_install = install
+        visible = install is not None
+        self.row_anr.setVisible(visible)
+        self.lb_anr_note.setVisible(visible)
+        if not visible:
+            return
+        profile = anr_profile.load_profile(install.ini_path)
+        index = self.cmb_anr_path.findData(profile.path)
+        self.cmb_anr_path.setCurrentIndex(max(0, index))
+        self.seg_anr_mult.set_value(max(0, min(4, profile.mult - anr_profile.MULT_MIN)))
+        self.sw_anr_cut.setChecked(profile.scene_cut)
+        self.ed_anr_nits.setText(str(profile.nits_per_unit))
+
+    def apply_anr(self) -> None:
+        """把界面上的 ANR 设置写回游戏目录里的 nr_fg.ini。"""
+        install = getattr(self, "_anr_install", None)
+        if install is None:
+            return
+        try:
+            nits = int(str(self.ed_anr_nits.text()).strip() or anr_profile.NITS_DEFAULT)
+        except ValueError:
+            nits = anr_profile.NITS_DEFAULT
+        profile = anr_profile.AnrProfile(
+            path=self.cmb_anr_path.currentData() or anr_profile.DEFAULT_PATH,
+            max_generated=anr_profile.mult_to_max_generated(
+                anr_profile.MULT_MIN + max(0, self.seg_anr_mult.value())),
+            scene_cut=self.sw_anr_cut.isChecked(),
+            nits_per_unit=nits,
+        ).normalized()
+        try:
+            anr_profile.save_profile(install.ini_path, profile)
+        except OSError as exc:
+            self._log(f"[错误] 写入 ANR 配置失败：{exc}")
+            self.toast_msg("写入 ANR 配置失败", "bad")
+            return
+        self._log(f"[提示] 已写入 ANR 配置：{install.ini_path}（重启游戏生效）")
+        self.toast_msg("ANR 配置已写入，重启游戏生效", "ok")
 
     def _mult(self) -> int:
         return {0: 2, 1: 3, 2: 4, 3: 5, 4: 6}.get(self.seg_mult.value(), 2)
