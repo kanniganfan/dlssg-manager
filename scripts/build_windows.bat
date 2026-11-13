@@ -1,15 +1,37 @@
 @echo off
 rem ============================================================
 rem  DLSSG Manager - Windows 一键构建脚本
-rem  产物: dist\1.9.6\DLSSG Manager.exe + payload\ 便携发行包
+rem  版本号统一取自 src\core.py 的 APP_VERSION（唯一来源）
+rem  产物: dist\<版本>\DLSSG Manager.exe
 rem ============================================================
 setlocal
 cd /d "%~dp0.."
 
 set "VENV=%CD%\.venv"
 set "PY=%VENV%\Scripts\python.exe"
-set "BUILD_DIR=%CD%\build\1.9.6"
-set "DIST_DIR=%CD%\dist\1.9.6"
+
+if not exist "%PY%" (
+    echo [1/4] 创建隔离虚拟环境...
+    python -m venv "%VENV%" || goto :err
+) else (
+    echo [1/4] 虚拟环境已存在，跳过
+)
+
+echo [2/4] 安装依赖 ^(PySide6 + PyInstaller^)...
+"%PY%" -m pip install --quiet --upgrade pip || goto :err
+"%PY%" -m pip install --quiet PySide6 pyinstaller || goto :err
+
+rem ---- 版本号：唯一来源 src\core.py:APP_VERSION ----
+set "VERSION="
+for /f "usebackq delims=" %%v in (`"%PY%" scripts\read_version.py`) do set "VERSION=%%v"
+if not defined VERSION (
+    echo [错误] 无法从 src\core.py 读取 APP_VERSION
+    goto :err
+)
+echo [信息] 版本号: %VERSION%
+
+set "BUILD_DIR=%CD%\build\%VERSION%"
+set "DIST_DIR=%CD%\dist\%VERSION%"
 
 if exist "%BUILD_DIR%" (
     echo [错误] 构建目录已存在，为保护其中内容而停止: %BUILD_DIR%
@@ -22,17 +44,6 @@ if exist "%DIST_DIR%" (
 mkdir "%BUILD_DIR%\work" || goto :err
 mkdir "%BUILD_DIR%\spec" || goto :err
 mkdir "%DIST_DIR%" || goto :err
-
-if not exist "%PY%" (
-    echo [1/4] 创建隔离虚拟环境...
-    python -m venv "%VENV%" || goto :err
-) else (
-    echo [1/4] 虚拟环境已存在，跳过
-)
-
-echo [2/4] 安装依赖 ^(PySide6 + PyInstaller^)...
-"%PY%" -m pip install --quiet --upgrade pip || goto :err
-"%PY%" -m pip install --quiet PySide6 pyinstaller || goto :err
 
 echo [3/4] 源码自检...
 "%PY%" -m py_compile src\core.py src\ui.py src\i18n.py src\main.py || goto :err
@@ -47,7 +58,7 @@ echo [4/4] PyInstaller 打包...
 echo.
 echo ============================================================
 echo   构建完成: %DIST_DIR%\DLSSG Manager.exe
-echo   发布包需包含同级 payload\ 文件夹
+echo   发布包: python scripts\build_release.py（便携 zip + 安装包）
 echo ============================================================
 exit /b 0
 

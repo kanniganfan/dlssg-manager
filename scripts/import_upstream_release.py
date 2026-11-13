@@ -7,6 +7,7 @@ for path traversal, links, duplicate names, and unreasonable expansion sizes.
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -51,7 +52,7 @@ def safe_member_name(info: zipfile.ZipInfo, seen: set[str]) -> PurePosixPath | N
     return None if info.is_dir() else PurePosixPath(*parts)
 
 
-def import_release(archive: Path) -> None:
+def import_release(archive: Path, force: bool = False) -> None:
     if not archive.is_file():
         raise FileNotFoundError(archive)
     actual_archive_hash = sha256_file(archive)
@@ -60,8 +61,13 @@ def import_release(archive: Path) -> None:
 
     payload = ROOT / "payload"
     manifest_module = ROOT / "src" / "upstream_payload.py"
-    if payload.exists() or manifest_module.exists():
-        raise FileExistsError("payload/ or src/upstream_payload.py already exists; refusing to overwrite")
+    # payload/ 是派生产物：已存在就默认拒绝，除非显式 --force（旧的会留成 .bak）。
+    if payload.exists() and not force:
+        raise FileExistsError(
+            "payload/ 已存在；如要重建请加 --force（旧目录会改名成 payload.bak-<时间> 保留）")
+    # src/upstream_payload.py 是上游内容的「钉子」：已存在时**不覆盖**，
+    # 而是要求这次解出来的清单与它逐字节一致 —— 不一致说明上游内容变了，直接失败。
+    pinned_text = manifest_module.read_text(encoding="utf-8") if manifest_module.exists() else None
 
     stage = Path(tempfile.mkdtemp(prefix=".payload-0.4.1-", dir=ROOT))
     module_tmp: Path | None = None
@@ -98,17 +104,35 @@ def import_release(archive: Path) -> None:
             f"UPSTREAM_ARCHIVE_SHA256 = {ARCHIVE_SHA256!r}\n"
             f"PAYLOAD_FILES_SHA256 = __import__('json').loads({data!r})\n"
         )
+        if pinned_text is not None and pinned_text != module_text:
+            raise ValueError(
+                "解出的文件清单与 src/upstream_payload.py 里的钉子不一致："
+                "上游包内容或 VERSION / ARCHIVE_SHA256 被改过，请先核对再导入")
+
         fd, tmp_name = tempfile.mkstemp(prefix="upstream_payload.", suffix=".tmp", dir=manifest_module.parent)
         os.close(fd)
         module_tmp = Path(tmp_name)
         module_tmp.write_text(module_text, encoding="utf-8", newline="\n")
+
+        backup: Path | None = None
+        if payload.exists():
+            stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup = payload.with_name(f"payload.bak-{stamp}")
+            os.replace(payload, backup)
         os.replace(stage, payload)
         try:
-            os.replace(module_tmp, manifest_module)
+            if pinned_text is None:      # 首次导入才写钉子
+                os.replace(module_tmp, manifest_module)
         except Exception:
             os.replace(payload, stage)
+            if backup is not None:
+                os.replace(backup, payload)
             raise
-        print(f"Imported upstream {VERSION}: {len(files)} files, archive SHA-256 {actual_archive_hash}")
+        kept = "（清单与钉子一致，未改动 src/upstream_payload.py）" if pinned_text is not None else ""
+        print(f"Imported upstream {VERSION}: {len(files)} files, "
+              f"archive SHA-256 {actual_archive_hash}{kept}")
+        if backup is not None:
+            print(f"旧 payload 已保留为 {backup.name}")
     finally:
         if module_tmp and module_tmp.exists():
             module_tmp.unlink()
@@ -119,8 +143,10 @@ def import_release(archive: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("archive", type=Path, help="official dlssg-release-0.4.1-x64.zip")
+    parser.add_argument("--force", action="store_true",
+                        help="payload/ 已存在时重建（旧的改名成 payload.bak-<时间>）")
     args = parser.parse_args()
-    import_release(args.archive.resolve())
+    import_release(args.archive.resolve(), force=args.force)
     return 0
 
 

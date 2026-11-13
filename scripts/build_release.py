@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -21,14 +22,40 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DIST = ROOT / "dist" / "1.9.6"
-STAGE = ROOT / "build" / "release-stage" / "1.9.6"
-NSIS = ROOT / "_tools" / "nsis-3.10" / "makensis.exe"
 PUB = ROOT
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from read_version import read_version  # noqa: E402
+
+
+def dist_dir(version: str) -> Path:
+    return ROOT / "dist" / version
+
+
+def stage_dir(version: str) -> Path:
+    return ROOT / "build" / "release-stage" / version
+
+
+def find_makensis() -> Path | None:
+    """按顺序找 makensis：MAKENSIS 环境变量 → 仓库 _tools → 系统安装 → PATH。"""
+    candidates: list[Path] = []
+    env = os.environ.get("MAKENSIS")
+    if env:
+        candidates.append(Path(env))
+    candidates.append(ROOT / "_tools" / "nsis-3.10" / "makensis.exe")
+    for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles")):
+        if base:
+            candidates.append(Path(base) / "NSIS" / "makensis.exe")
+    which = shutil.which("makensis")
+    if which:
+        candidates.append(Path(which))
+    return next((p for p in candidates if p.is_file()), None)
 
 
 def build_stage(version: str) -> None:
     """组装安装/便携共用的暂存目录。"""
+    DIST = dist_dir(version)
+    STAGE = stage_dir(version)
     if STAGE.exists():
         sys.exit(f"暂存目录已存在，为保护其中内容而停止: {STAGE}")
     if not (DIST / "DLSSG Manager.exe").is_file():
@@ -58,6 +85,8 @@ def build_stage(version: str) -> None:
 
 
 def build_portable(version: str) -> Path:
+    DIST = dist_dir(version)
+    STAGE = stage_dir(version)
     out = DIST / f"DLSSG_Manager_{version}_portable_x64.zip"
     if out.exists():
         sys.exit(f"发行包已存在，为保护它而停止: {out}")
@@ -71,8 +100,12 @@ def build_portable(version: str) -> Path:
 
 
 def build_installer(version: str) -> Path:
-    if not NSIS.exists():
-        sys.exit(f"未找到 makensis: {NSIS}（解压 NSIS 到 _tools/nsis-3.10）")
+    DIST = dist_dir(version)
+    STAGE = stage_dir(version)
+    NSIS = find_makensis()
+    if NSIS is None:
+        sys.exit("未找到 makensis：设 MAKENSIS 环境变量、解压到 _tools/nsis-3.10，"
+                 "或 winget install NSIS.NSIS")
     # 版本号注入（读 utf-8-sig 已剥 BOM，写回也只用 utf-8-sig，勿重复加）
     import re
     nsi_path = STAGE / "installer.nsi"
@@ -103,17 +136,18 @@ def build_installer(version: str) -> Path:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--version", default="1.9.6")
+    ap.add_argument("--version", default=None, help="默认取 src/core.py 的 APP_VERSION")
     ap.add_argument("--keep-stage", action="store_true")
     ap.add_argument("--portable-only", action="store_true",
                     help="只生成便携 ZIP，不需要 NSIS")
     args = ap.parse_args()
+    version = args.version or read_version()
 
-    build_stage(args.version)
-    p = build_portable(args.version)
-    i = None if args.portable_only else build_installer(args.version)
+    build_stage(version)
+    p = build_portable(version)
+    i = None if args.portable_only else build_installer(version)
     if not args.keep_stage:
-        shutil.rmtree(STAGE, ignore_errors=True)
+        shutil.rmtree(stage_dir(version), ignore_errors=True)
 
     print("\n发行产物:")
     print(f"  {p}")
