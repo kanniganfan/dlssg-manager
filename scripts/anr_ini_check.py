@@ -106,11 +106,39 @@ def main() -> int:
         if hit2 is None or hit2.layout != "sideload":
             failures.append(f"侧载布局未识别: {hit2}")
 
+    # 9) 未知键必须保留：ANR 自己还有 nvidia_dlssg 之类的键，重写配置不能弄丢
+    with tempfile.TemporaryDirectory(prefix="anr_extra_", dir=build) as temp:
+        ini3 = Path(temp) / "nr_fg.ini"
+        ini3.write_text("nvidia_dlssg = off\npath = auto\nfoo = bar\n", encoding="utf-8")
+        anr.save_profile(ini3, want)
+        text = ini3.read_text(encoding="utf-8")
+        for needle in ("nvidia_dlssg = off", "foo = bar", "path = dp4a"):
+            if needle not in text:
+                failures.append(f"未知键/已知键丢失: {needle!r}")
+        if anr.parse_extras(text) != {"nvidia_dlssg": "off", "foo": "bar"}:
+            failures.append(f"parse_extras 解析不对: {anr.parse_extras(text)}")
+
+    # 10) 布局完整性检查
+    with tempfile.TemporaryDirectory(prefix="anr_layout_", dir=build) as temp:
+        base = Path(temp) / "dlssg"
+        base.mkdir()
+        for name in anr.SUPPORT_FILES:
+            (base / name).write_text("x", encoding="utf-8")
+        for name in anr.SUPPORT_DIRS:
+            (base / name).mkdir()
+        (base / "nvngx_dlssg.dll").write_bytes(b"MZ")
+        if anr.check_layout(base):
+            failures.append(f"完整布局被误判: {anr.check_layout(base)}")
+        (base / "size_table.json").unlink()
+        missing = anr.check_layout(base)
+        if "size_table.json" not in missing:
+            failures.append(f"缺件未被发现: {missing}")
+
     if failures:
         for line in failures:
             print("FAIL:", line)
         return 1
-    print("PASS: anr profile (8 groups)")
+    print("PASS: anr profile (10 groups)")
     return 0
 
 

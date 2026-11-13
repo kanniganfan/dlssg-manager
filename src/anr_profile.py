@@ -42,6 +42,15 @@ NITS_MIN, NITS_MAX, NITS_DEFAULT = 40, 1000, 80
 DEFAULT_PATH = "auto"
 DEFAULT_MODEL_SIZE = "large"
 
+# 我们负责写回的键；其余键（例如 ANR 自己的 nvidia_dlssg）原样保留
+KNOWN_KEYS = ("build", "path", "model_size", "model_note",
+              "nits_per_unit", "max_generated", "scene_cut")
+
+# DLL 按自身所在目录找这些资源（它 import 了 GetModuleFileNameA/W，
+# 并拼 "\\path_table.json"、"\\programs\\fg-lite-*"），所以它们必须和 DLL 同级。
+SUPPORT_DIRS = ("programs", "kernels", "kernels-portable", "adapters")
+SUPPORT_FILES = ("path_table.json", "size_table.json", "nr_fg.ini")
+
 
 def mult_to_max_generated(mult: int) -> int:
     """界面倍率（2X–6X）→ ini 的 max_generated（1–5，官方语义：每帧额外生成几帧）。"""
@@ -121,9 +130,14 @@ class AnrProfile:
             model_size=values.get("model_size", default.model_size).strip() or DEFAULT_MODEL_SIZE,
         ).normalized()
 
-    def to_ini_text(self) -> str:
-        """写成 ANR 认识的裸 ini，键名与官方包一字不差。"""
+    def to_ini_text(self, extras: dict[str, str] | None = None) -> str:
+        """写成 ANR 认识的裸 ini，键名与官方包一字不差。
+
+        extras 是用户自己加的键（例如 `nvidia_dlssg = off`）：ANR 会解析，
+        我们重写配置时不能把它们弄丢。
+        """
         profile = self.normalized()
+        tail = "".join(f"{k} = {v}\n" for k, v in (extras or {}).items())
         return (
             "; ANR FG (Apex Neural Rendering). Restart the game after a change.\n"
             "; 由 DLSSG Manager 写入；想恢复默认就删掉本文件，游戏会自己重建。\n"
@@ -133,6 +147,7 @@ class AnrProfile:
             f"nits_per_unit = {profile.nits_per_unit}\n"
             f"max_generated = {profile.max_generated}\n"
             f"scene_cut = {1 if profile.scene_cut else 0}\n"
+            + tail
         )
 
 
@@ -148,6 +163,31 @@ class AnrInstall:
         return self.ini_path.parent.parent
 
 
+def parse_extras(text: str) -> dict[str, str]:
+    """取出 ini 里我们不管的键，供重写时原样带回。"""
+    extras: dict[str, str] = {}
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped[0] in ";#":
+            continue
+        key, sep, raw = stripped.partition("=")
+        key = key.strip()
+        if not sep or not key or key in KNOWN_KEYS:
+            continue
+        extras[key] = raw.strip()
+    return extras
+
+
+def check_layout(plugin_dir) -> list[str]:
+    """检查一个 ANR 插件目录是否完整（DLL 与资源必须同级）。"""
+    base = Path(plugin_dir)
+    missing = [name for name in SUPPORT_FILES if not (base / name).is_file()]
+    missing += [f"{name}/" for name in SUPPORT_DIRS if not (base / name).is_dir()]
+    if not (base / "nvngx_dlssg.dll").is_file():
+        missing.insert(0, "nvngx_dlssg.dll")
+    return missing
+
+
 def load_profile(ini_path) -> AnrProfile:
     """读游戏里的 nr_fg.ini；文件不存在或读不了就回默认值。"""
     try:
@@ -160,10 +200,15 @@ def save_profile(ini_path, profile: AnrProfile) -> None:
     """原子写 + 留一份 .bak（ANR 官方安装器也是这么干的）。"""
     p = Path(ini_path)
     p.parent.mkdir(parents=True, exist_ok=True)
+    extras: dict[str, str] = {}
     if p.exists():
         shutil.copy2(p, p.with_suffix(p.suffix + ".bak"))
+        try:
+            extras = parse_extras(p.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            extras = {}
     tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(profile.to_ini_text(), encoding="utf-8", newline="\n")
+    tmp.write_text(profile.to_ini_text(extras), encoding="utf-8", newline="\n")
     tmp.replace(p)
 
 
