@@ -1616,32 +1616,165 @@ def scan_ubisoft() -> list[tuple[str, str, str]]:
     return found
 
 
-def _root_is_game_dir(rp: Path) -> bool:
-    """判断用户添加的目录本身就是一个游戏目录，而不是装着多个游戏的库目录。"""
+# ---- 用户手动添加的目录：展开成「游戏根」 ----------------------------------
+# 探底最多几层；单次探测最多走多少个目录（误选整个磁盘时不至于卡死）
+IMPORT_PROBE_DEPTH = 3
+IMPORT_PROBE_BUDGET = 4000
+IMPORT_CHILD_BUDGET = 12000
+IMPORT_LIBRARY_MIN_KIDS = 2
+IMPORT_EXPAND_DEPTH = 3
+IMPORT_MAX_CHILDREN = 200
+IMPORT_MAX_ROWS = 120
+IMPORT_MIN_EXE_MB = 3
+
+# 游戏目录内部的固定子目录：里面有 exe 也不代表「这是一个新游戏」
+GAME_INNER_DIRS = frozenset({
+    "binaries", "bin", "win64", "win32", "x64", "x86", "x86_64", "amd64",
+    "engine", "content", "data", "saved", "config", "plugins", "mods",
+    "redist", "redistributable", "support", "prerequisites", "thirdparty", "dlc",
+    "third_party", "native", "shipping", "paks",
+})
+
+
+def _plausible_exe(p: Path) -> bool:
+    """这个 EXE 像不像渲染进程：先过黑名单，再看体积。"""
+    if _exe_blacklisted(p):
+        return False
+    try:
+        return p.stat().st_size >= IMPORT_MIN_EXE_MB * 1024 * 1024
+    except OSError:
+        return False
+
+
+def _probe_exes(root: Path, max_depth: int = IMPORT_PROBE_DEPTH,
+                budget: int = IMPORT_PROBE_BUDGET) -> tuple[bool, int]:
+    """root 下（最多 max_depth 层）有没有像样的 EXE；同时回报走了多少个目录。"""
+    base = len(root.parts)
+    visited = 0
+    try:
+        for cur, dirs, files in os.walk(root):
+            visited += 1
+            if visited > budget:
+                return False, visited
+            dirs[:] = [d for d in dirs if d.lower() not in DIR_BLACKLIST]
+            if len(Path(cur).parts) - base >= max_depth:
+                dirs[:] = []
+            for f in files:
+                if f.lower().endswith(".exe") and _plausible_exe(Path(cur) / f):
+                    return True, visited
+    except Exception:
+        pass
+    return False, visited
+
+
+def _own_exe(rp: Path) -> bool:
+    """目录根上直接摆着游戏 EXE（setup / launcher 这类黑名单 EXE 不算）。"""
     try:
         for p in rp.iterdir():
-            if p.is_file() and p.suffix.lower() == ".exe":
+            if p.is_file() and p.suffix.lower() == ".exe" and _plausible_exe(p):
                 return True
     except OSError:
         pass
+    return False
+
+
+def _root_is_game_dir(rp: Path) -> bool:
+    """目录本身就是一个游戏（根上有 EXE，或带 UE / Unity 的目录结构）。"""
+    if _own_exe(rp):
+        return True
     return any((rp / m).is_dir() for m in ("Binaries", "Engine", "Content", "Data", "Saved"))
 
 
+def _game_like_children(rp: Path) -> list[Path]:
+    """rp 下「各自看起来是一个游戏」的直接子目录。
+
+    整次判定共用一个目录预算：用户误选了整个磁盘时，宁可少认几个，
+    也不要把界面卡住（真正的全盘扫描走「深度扫描」）。
+    """
+    kids: list[Path] = []
+    spent = 0
+    try:
+        for child in sorted(rp.iterdir()):
+            if not child.is_dir():
+                continue
+            low = child.name.lower()
+            if low in GAME_INNER_DIRS or low in DIR_BLACKLIST:
+                continue
+            if spent >= IMPORT_CHILD_BUDGET:
+                break
+            found, used = _probe_exes(child, budget=min(IMPORT_PROBE_BUDGET,
+                                                       IMPORT_CHILD_BUDGET - spent))
+            spent += used
+            if found:
+                kids.append(child)
+            if len(kids) >= IMPORT_MAX_CHILDREN:
+                break
+    except OSError:
+        pass
+    return kids
+
+
+def expand_custom_root(root: str, depth: int = 0) -> list[tuple[str, str, str]]:
+    """把一个用户添加的目录展开成若干「游戏根」行。
+
+    以前这里只做「要么自己算一个游戏、要么只看一层子目录」的二选一，
+    结果是：库目录里散落一个 setup.exe 就只认出 1 个游戏，游戏要是再深一层
+    （`库/Steam/游戏A`）整棵树会被并成 1 个条目。现在按结构判断：
+
+    1. 根上就有游戏 EXE        → 它自己就是一个游戏；
+    2. 下面 ≥2 个像游戏的子目录 → 当成库目录，逐个展开（库套库也认）；
+    3. 只有一层单个子目录       → 再往里探一层（最多 IMPORT_EXPAND_DEPTH 层）；
+    4. 都不像                   → 原样交给 find_candidates 试一次。
+    """
+    rp = Path(root)
+    if not rp.is_dir():
+        return []
+    own = _own_exe(rp)
+    kids = _game_like_children(rp)
+    if own and len(kids) < IMPORT_LIBRARY_MIN_KIDS:
+        return [(rp.name, str(rp), tr('自定义'))]
+
+    if len(kids) >= 2:
+        rows: list[tuple[str, str, str]] = []
+        if own:
+            # 根上这个 EXE 也得看：它可能就是其中一个游戏，重复的会被 exe_dir 去重掉
+            rows.append((rp.name, str(rp), tr('自定义')))
+        for kid in kids:
+            if depth < IMPORT_EXPAND_DEPTH:
+                rows.extend(expand_custom_root(str(kid), depth + 1)
+                            or [(kid.name, str(kid), tr('自定义'))])
+            else:
+                rows.append((kid.name, str(kid), tr('自定义')))
+            if len(rows) >= IMPORT_MAX_ROWS:
+                break
+        return rows[:IMPORT_MAX_ROWS]
+
+    if own or _root_is_game_dir(rp):
+        return [(rp.name, str(rp), tr('自定义'))]
+
+    if kids:
+        kid = kids[0]
+        if depth < IMPORT_EXPAND_DEPTH:
+            return expand_custom_root(str(kid), depth + 1)
+        return [(kid.name, str(kid), tr('自定义'))]
+
+    # 既没有认得出的结构、也没有子目录像游戏：还是交给 find_candidates 试一次
+    return [(rp.name, str(rp), tr('自定义'))]
+
+
 def scan_custom_roots(roots: list[str]) -> list[tuple[str, str, str]]:
-    found = []
+    found: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
     for r in roots:
-        rp = Path(r)
-        if not rp.is_dir():
-            continue
-        if _root_is_game_dir(rp):
-            found.append((rp.name, str(rp), tr('自定义')))
-            continue
-        try:
-            for child in sorted(rp.iterdir()):
-                if child.is_dir():
-                    found.append((child.name, str(child), tr('自定义')))
-        except OSError:
-            continue
+        for row in expand_custom_root(r):
+            try:
+                key = norm(canon_dir(row[1]))
+            except Exception:
+                key = norm(row[1])
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(row)
     return found
 
 
