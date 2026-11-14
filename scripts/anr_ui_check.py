@@ -83,8 +83,28 @@ def main() -> int:
 
     # 没装 ANR 的游戏 → 区块隐藏
     win.select("plain")
+    # 有 ANR 源包时区块会出现（方便先看参数），但「写入」必须禁用，且提示尚未部署
     if win.row_anr.isVisibleTo(win):
-        fails.append("没装 ANR 的游戏不该显示区块")
+        if win.btn_anr_apply.isEnabled():
+            fails.append("没部署 ANR 的游戏不该能写入配置")
+        if "尚未部署" not in win.lb_anr_note.text():
+            fails.append(f"提示文案不对: {win.lb_anr_note.text()!r}")
+
+    # 引擎下拉里应该有 ANR，切过去要：显示 ANR 区块 + 主按钮改名 + DLSS 专属项灰掉
+    idx = win.cmb_engine.findData("ANR")
+    if idx < 0:
+        fails.append("引擎下拉里没有 ANR 选项")
+    else:
+        win.cmb_engine.setCurrentIndex(idx)
+        app.processEvents()
+        win._sync_engine_mode()
+        app.processEvents()
+        if not win.row_anr.isVisibleTo(win):
+            fails.append("切到 ANR 后 ANR 区块没显示")
+        if "ANR" not in win.btn_install.text():
+            fails.append(f"切到 ANR 后主按钮没改名: {win.btn_install.text()!r}")
+        if win.cmb_preset.isEnabled():
+            fails.append("切到 ANR 后 DLSS-G 预设应被灰掉")
 
     # 截图（回到有 ANR 的那个游戏）
     win.select("anr")

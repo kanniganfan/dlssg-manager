@@ -2312,7 +2312,7 @@ class MainWindow(QWidget):
         整页可滚动，任何元素都不会被裁剪、压扁或互相遮挡；
         高度充足时（setWidgetResizable）不出现滚动条，观感与原来一致。
         """
-        scroll = QScrollArea()
+        self.detail_scroll = scroll = QScrollArea()
         scroll.setObjectName("detailScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -2405,11 +2405,13 @@ class MainWindow(QWidget):
         self.cmb_engine = Combo()
         self.cmb_engine.addItem(tr('NVIDIA DLSS-G'), "DLSS")
         self.cmb_engine.addItem(tr('Intel XeSS-FG（实验性）'), "XeSS")
+        self.cmb_engine.addItem("ANR FG（Apex，实验）", "ANR")
         self.cmb_engine.setMinimumWidth(170)
         self.cmb_engine.setMaximumWidth(280)
         self.cmb_engine.setToolTip(
             tr('DLSS-G 是默认引擎；XeSS-FG 提供 2X–4X 插帧，兼容性与性能因游戏而异。'))
         self.cmb_engine.currentIndexChanged.connect(lambda _i: self._on_engine_changed())
+        self.cmb_engine.currentIndexChanged.connect(lambda _i: self._sync_engine_mode())
         r2.add(self.cmb_engine)
         c = QLabel(tr('插帧倍率'))
         c.setObjectName("kv")
@@ -2941,6 +2943,25 @@ class MainWindow(QWidget):
         rt = self.cmb_runtime.currentData() if hasattr(self, "cmb_runtime") else ""
         return rt or core.DEFAULT_RUNTIME
 
+    def _sync_engine_mode(self) -> None:
+        """切到 ANR 时把 DLSS-G 专属控件灰掉，主按钮改成部署 ANR。"""
+        is_anr = self._engine() == "ANR"
+        for attr in ("cmb_runtime", "cmb_entry", "seg_tier"):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                widget.setEnabled(not is_anr)
+        label = getattr(self, "lb_tier", None)
+        if label is not None:
+            label.setEnabled(not is_anr)
+        seg_mult = getattr(self, "seg_mult", None)
+        if seg_mult is not None:
+            seg_mult.setEnabled(not is_anr)
+        button = getattr(self, "btn_install", None)
+        if button is not None:
+            button.setText("部署 ANR（实验）" if is_anr else tr('一键启用插帧'))
+        if getattr(self, "current", None) is not None:
+            self._sync_anr_block(self.current)
+
     def _engine(self) -> str:
         if core.runtime_is_legacy(self._runtime()):
             return "DLSS"
@@ -3017,12 +3038,25 @@ class MainWindow(QWidget):
         """按当前游戏回显 ANR 设置；没装 ANR 就把整块藏起来。"""
         install = anr_profile.detect_install(game.exe_dir) if game else None
         self._anr_install = install
-        visible = install is not None
+        source = anr_deploy.default_source_dir(Path(__file__).resolve().parents[1])
+        # 装了 ANR 自然要显示；只装了源包（还没部署到该游戏）也显示，方便先调参数
+        engine_is_anr = hasattr(self, "cmb_engine") and self._engine() == "ANR"
+        visible = install is not None or engine_is_anr or (game is not None and source is not None)
         self.row_anr.setVisible(visible)
         self.lb_anr_note.setVisible(visible)
         if not visible:
             return
-        profile = anr_profile.load_profile(install.ini_path)
+        # 区块在配置卡片底部，选中游戏后自动滚到它，免得用户以为没有这个功能
+        QTimer.singleShot(0, lambda: getattr(self, "detail_scroll", None)
+                          and self.detail_scroll.ensureWidgetVisible(self.row_anr, 0, 28))
+        if install is None:
+            self.btn_anr_apply.setEnabled(False)
+            table_dir = source
+            profile = anr_profile.AnrProfile()
+        else:
+            self.btn_anr_apply.setEnabled(True)
+            table_dir = install.plugin_dir
+            profile = anr_profile.load_profile(install.ini_path)
         index = self.cmb_anr_path.findData(profile.path)
         self.cmb_anr_path.setCurrentIndex(max(0, index))
         self.seg_anr_mult.set_value(max(0, min(4, profile.mult - anr_profile.MULT_MIN)))
@@ -3033,10 +3067,13 @@ class MainWindow(QWidget):
         rec = None
         try:
             width, height = game.resolution if game else (0, 0)
-            rec = anr_profile.recommend(install.plugin_dir, getattr(self.gpu, "name", ""), width, height)
+            rec = anr_profile.recommend(table_dir, getattr(self.gpu, "name", ""), width, height)
         except Exception:
             rec = None
-        if rec is not None:
+        if install is None:
+            note = "ANR FG：尚未部署到本游戏；先用下方「部署 ANR（实验）」，再回来调参数。"
+            self.lb_anr_note.setText(note + (f" 官方建议 {rec.text}。" if rec is not None else ""))
+        elif rec is not None:
             self.lb_anr_note.setText(f"ANR FG：官方建议 {rec.text}；改完需重启游戏生效。")
             for i in range(anr_profile.MULT_MAX - anr_profile.MULT_MIN + 1):
                 mult = anr_profile.MULT_MIN + i
@@ -3198,6 +3235,9 @@ class MainWindow(QWidget):
             self._log(tr('[提示] 检测到反作弊组件（仅提示，不影响部署；是否联机使用由你自行判断）'))
         if not g.dlssg:
             self._log(tr('[警告] 该游戏未检测到 nvngx_dlssg.dll，可能不支持帧生成；若游戏内置 DLSSG 能力仍可尝试'))
+        if self._engine() == "ANR":
+            self.do_anr_deploy()
+            return
         self.btn_install.setEnabled(False)
         self.status.setText(tr('正在部署…'))
         self.kw = ActionWorker(core.deploy, g, "SM86", self._mult(),
