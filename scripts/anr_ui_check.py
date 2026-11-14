@@ -161,12 +161,16 @@ def main() -> int:
     app.processEvents()
     if not win.btn_restore.isEnabled():
         fails.append("部署 ANR 后「还原 ANR」仍然是灰的（识别不到部署）")
+    if not getattr(win.games[1], "anr_deployed", False):
+        fails.append("部署后游戏对象没标记 anr_deployed（左侧卡片会一直显示可启用）")
     if "已部署" not in " ".join(p.text() if hasattr(p, "text") else "" for p in []):
         pass
     win.do_anr_restore()
     app.processEvents()
     if win.btn_restore.isEnabled():
         fails.append("还原 ANR 后按钮应回到灰色")
+    if getattr(win.games[1], "anr_deployed", False):
+        fails.append("还原后 anr_deployed 应清除")
 
     # 窄宽度自适应：提示文字必须换行，ANR 行不能超出视口
     if not win.lb_anr_note.wordWrap():

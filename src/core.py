@@ -1479,6 +1479,7 @@ class Game:
     anticheat: bool = False
     candidates: list = field(default_factory=list)
     deployed: bool = False
+    anr_deployed: bool = False      # 本工具把 ANR FG 部署到该游戏目录（和 deployed 互斥）
     entry: str = ""
     installed_at: float = 0.0
     resolution: tuple = (0, 0)

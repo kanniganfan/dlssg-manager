@@ -823,6 +823,8 @@ class GameCard(QFrame):
         g = self.game
         if g.deployed:
             self.pill.set_kind(tr('已启用'), "ok")
+        elif getattr(g, "anr_deployed", False):
+            self.pill.set_kind("ANR 已部署", "ok")
         elif g.dlssg:
             self.pill.set_kind(tr('可启用'), "info")
         elif g.dlss:
@@ -2753,6 +2755,9 @@ class MainWindow(QWidget):
             if w:
                 w.deleteLater()
         self.cards.clear()
+        anr_state = (core.load_state().get("anr") or {})
+        for g in self.games:
+            g.anr_deployed = g.gid in anr_state
         for g in self.games:
             card = GameCard(g)
             card.clicked.connect(self.select)
@@ -3422,13 +3427,14 @@ class MainWindow(QWidget):
             return
         entry, ours = core.entry_of_deployment(g.exe_dir)
         g.deployed = ours
+        g.anr_deployed = bool(self._anr_record(g.gid))
         g.entry = entry
         g.config = core.read_deployed_config(g.exe_dir)
         card = self.cards.get(g.gid)
         if card:
             card.refresh()
         self.select(g.gid)
-        n_on = sum(1 for x in self.games if x.deployed)
+        n_on = sum(1 for x in self.games if x.deployed or getattr(x, "anr_deployed", False))
         n_ok = sum(1 for x in self.games if x.dlssg)
         self.count.setText(tr('识别到 {0} 个游戏 · {1} 个支持帧生成 · 已启用 {2}').format(len(self.games), n_ok, n_on))
 
