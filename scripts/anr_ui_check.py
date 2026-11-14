@@ -61,8 +61,8 @@ def main() -> int:
         fails.append("装了 ANR 但区块没显示")
     if win.cmb_anr_path.currentData() != "coopmat":
         fails.append(f"路径没回显: {win.cmb_anr_path.currentData()}")
-    if win.seg_anr_mult.value() != 1:            # max_generated=2 → 3X → 段索引 1
-        fails.append(f"倍率没回显: seg={win.seg_anr_mult.value()}")
+    if win.cmb_anr_mult.currentData() != 3:      # max_generated=2 → 3X
+        fails.append(f"倍率没回显: {win.cmb_anr_mult.currentData()}")
     if win.sw_anr_cut.isChecked():
         fails.append("scene_cut=0 应回显为关")
     if win.ed_anr_nits.text() != "120":
@@ -71,7 +71,7 @@ def main() -> int:
     # 改一改再写回
     idx = win.cmb_anr_path.findData("dp4a")
     win.cmb_anr_path.setCurrentIndex(idx)
-    win.seg_anr_mult.set_value(4)                 # 6X
+    win.cmb_anr_mult.setCurrentIndex(win.cmb_anr_mult.findData(6))   # 6X
     win.sw_anr_cut.setChecked(True)
     win.ed_anr_nits.setText("203")
     win.apply_anr()
@@ -150,6 +150,18 @@ def main() -> int:
             fails.append(f"标题栏切回 DLSS 后引擎是 {win._engine()!r}")
         if not win.row_preset.isVisibleTo(win):
             fails.append("标题栏切回 DLSS 后预设行应展开")
+
+    # 窄宽度自适应：提示文字必须换行，ANR 行不能超出视口
+    if not win.lb_anr_note.wordWrap():
+        fails.append("ANR 提示标签没开换行，窄窗口会撑破卡片")
+    win.resize(780, 900)
+    for _ in range(20):
+        app.processEvents()
+    viewport = win.detail_scroll.viewport().width()
+    for attr in ("row_anr", "row_anr2", "row_anr3"):
+        row = getattr(win, attr)
+        if row.minimumSizeHint().width() > viewport:
+            fails.append(f"{attr} 最小宽度 {row.minimumSizeHint().width()} 超过视口 {viewport}")
 
     # 截图（回到有 ANR 的那个游戏）
     win.select("anr")

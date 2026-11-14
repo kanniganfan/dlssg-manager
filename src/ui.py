@@ -2517,7 +2517,9 @@ class MainWindow(QWidget):
 
         # ---- ANR FG（Apex Neural Rendering）：只有该游戏目录里已经装了 ANR 才显示。
         # TODO(i18n): 这批实验性文案暂未进 gen_i18n_catalog.py，PR2（部署）时统一处理。
+        # ANR 参数拆成三行：窄窗口下每行都能自己换行，不会把卡片撑宽
         self.row_anr = FlowRow(h_spacing=10, v_spacing=6)
+        self.row_anr.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         anr_path_label = QLabel("ANR 路径")
         anr_path_label.setObjectName("kv")
         anr_path_label.setToolTip("ANR 的卷积路径；自动会按显卡挑最优，卡顿时再手动指定。")
@@ -2529,40 +2531,55 @@ class MainWindow(QWidget):
             self.cmb_anr_path.setItemData(index, anr_profile.PATH_LABELS[value], Qt.ToolTipRole)
         self.cmb_anr_path.set_help({v: anr_profile.PATH_LABELS[v] for v in anr_profile.PATHS},
                                    popup_width=420)
-        self.cmb_anr_path.setMinimumWidth(150)
+        self.cmb_anr_path.setMinimumWidth(110)
+        self.cmb_anr_path.setMaximumWidth(170)
         self.row_anr.add(self.cmb_anr_path)
+        cl.addWidget(self.row_anr)
 
+        self.row_anr2 = FlowRow(h_spacing=10, v_spacing=6)
+        self.row_anr2.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         anr_mult_label = QLabel("ANR 倍率")
         anr_mult_label.setObjectName("kv")
-        self.row_anr.add(anr_mult_label)
-        self.seg_anr_mult = Segmented(["2X", "3X", "4X", "5X", "6X"], 4)
-        self.row_anr.add(self.seg_anr_mult)
+        self.row_anr2.add(anr_mult_label)
+        self.cmb_anr_mult = HelpCombo()
+        for _depth in range(anr_profile.MULT_MIN, anr_profile.MULT_MAX + 1):
+            _i = self.cmb_anr_mult.count()
+            self.cmb_anr_mult.addItem(f"{_depth}X", _depth)
+            self.cmb_anr_mult.setItemData(
+                _i, f"每 1 个真实帧生成 {_depth - 1} 帧", Qt.ToolTipRole)
+        self.cmb_anr_mult.setMinimumWidth(72)
+        self.cmb_anr_mult.setMaximumWidth(96)
+        self.row_anr2.add(self.cmb_anr_mult)
+        cl.addWidget(self.row_anr2)
 
+        self.row_anr3 = FlowRow(h_spacing=10, v_spacing=6)
+        self.row_anr3.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         anr_cut_label = QLabel("场景切换")
         anr_cut_label.setObjectName("kv")
         anr_cut_label.setToolTip("开启后不在镜头切换处插帧，避免糊帧。")
-        self.row_anr.add(anr_cut_label)
+        self.row_anr3.add(anr_cut_label)
         self.sw_anr_cut = Switch(True)
-        self.row_anr.add(self.sw_anr_cut)
-
+        self.row_anr3.add(self.sw_anr_cut)
         anr_nits_label = QLabel("HDR 亮度")
         anr_nits_label.setObjectName("kv")
         anr_nits_label.setToolTip("HDR10 下模型线性 1.0 对应的显示亮度（nit），默认 80。")
-        self.row_anr.add(anr_nits_label)
+        self.row_anr3.add(anr_nits_label)
         self.ed_anr_nits = QLineEdit(str(anr_profile.NITS_DEFAULT))
-        self.ed_anr_nits.setFixedWidth(70)
-        self.row_anr.add(self.ed_anr_nits)
-
+        self.ed_anr_nits.setFixedWidth(64)
+        self.row_anr3.add(self.ed_anr_nits)
         self.btn_anr_apply = QPushButton("写入 ANR 配置")
         self.btn_anr_apply.setObjectName("ghost")
         self.btn_anr_apply.setCursor(Qt.PointingHandCursor)
         self.btn_anr_apply.setMinimumHeight(30)
         self.btn_anr_apply.clicked.connect(self.apply_anr)
-        self.row_anr.add(self.btn_anr_apply)
-        cl.addWidget(self.row_anr)
+        self.row_anr3.add(self.btn_anr_apply)
+        cl.addWidget(self.row_anr3)
 
         self.lb_anr_note = QLabel("ANR FG：改完需重启游戏生效。")
         self.lb_anr_note.setObjectName("kv")
+        self.lb_anr_note.setWordWrap(True)                  # 窄窗口时换行，不撑破卡片
+        self.lb_anr_note.setMinimumWidth(0)
+        self.lb_anr_note.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         cl.addWidget(self.lb_anr_note)
         self.row_anr.setVisible(False)
         self.lb_anr_note.setVisible(False)
@@ -2992,6 +3009,9 @@ class MainWindow(QWidget):
         self._sync_anr_block(getattr(self, "current", None))
 
         rows = (
+            (getattr(self, "row_anr", None), is_anr),
+            (getattr(self, "row_anr2", None), is_anr),
+            (getattr(self, "row_anr3", None), is_anr),
             (getattr(self, "row_preset", None), not is_anr),
             (getattr(self, "row_tier", None), not is_anr),
             (getattr(self, "lb_mult", None), not is_anr),
@@ -3021,6 +3041,10 @@ class MainWindow(QWidget):
                        getattr(self, "hags_card", None), getattr(self, "mask_card", None)):
             if widget is not None:
                 widget.setVisible(not is_anr)
+        # 预设/超分的长说明、一致性档位说明：ANR 模式下一并收起
+        for label in self.findChildren(QLabel):
+            if label.objectName() in ("optionHint", "tierHint"):
+                label.setVisible(not is_anr)
 
         if hasattr(self, "btn_install"):
             self.btn_install.setText("部署 ANR（实验）" if is_anr else tr('一键启用插帧'))
@@ -3108,8 +3132,10 @@ class MainWindow(QWidget):
         source = anr_deploy.default_source_dir(Path(__file__).resolve().parents[1])
         # 装了 ANR 自然要显示；只装了源包（还没部署到该游戏）也显示，方便先调参数
         engine_is_anr = hasattr(self, "cmb_engine") and self._engine() == "ANR"
-        visible = install is not None or engine_is_anr or (game is not None and source is not None)
+        visible = install is not None or engine_is_anr
         self.row_anr.setVisible(visible)
+        self.row_anr2.setVisible(visible)
+        self.row_anr3.setVisible(visible)
         self.lb_anr_note.setVisible(visible)
         if not visible:
             return
@@ -3126,7 +3152,8 @@ class MainWindow(QWidget):
             profile = anr_profile.load_profile(install.ini_path)
         index = self.cmb_anr_path.findData(profile.path)
         self.cmb_anr_path.setCurrentIndex(max(0, index))
-        self.seg_anr_mult.set_value(max(0, min(4, profile.mult - anr_profile.MULT_MIN)))
+        _mult_index = self.cmb_anr_mult.findData(profile.mult)
+        self.cmb_anr_mult.setCurrentIndex(max(0, _mult_index))
         self.sw_anr_cut.setChecked(profile.scene_cut)
         self.ed_anr_nits.setText(str(profile.nits_per_unit))
 
@@ -3143,17 +3170,25 @@ class MainWindow(QWidget):
             self.lb_anr_note.setText(note + (f" 官方建议 {rec.text}。" if rec is not None else ""))
         elif rec is not None:
             self.lb_anr_note.setText(f"ANR FG：官方建议 {rec.text}；改完需重启游戏生效。")
-            for i in range(anr_profile.MULT_MAX - anr_profile.MULT_MIN + 1):
-                mult = anr_profile.MULT_MIN + i
-                button = self.seg_anr_mult.group.button(i)
-                if button is not None:
-                    button.setEnabled(rec.mult_min <= mult <= rec.mult_max)
+            model = self.cmb_anr_mult.model()
+            for i in range(self.cmb_anr_mult.count()):
+                mult = self.cmb_anr_mult.itemData(i)
+                item = model.item(i) if hasattr(model, "item") else None
+                if item is not None:
+                    item.setEnabled(rec.mult_min <= int(mult) <= rec.mult_max)
         else:
             self.lb_anr_note.setText("ANR FG：改完需重启游戏生效。")
-            for i in range(anr_profile.MULT_MAX - anr_profile.MULT_MIN + 1):
-                button = self.seg_anr_mult.group.button(i)
-                if button is not None:
-                    button.setEnabled(True)
+
+        # 双保险：启动时恢复模式也能把两个主按钮文案对齐
+        if hasattr(self, "btn_install"):
+            self.btn_install.setText("部署 ANR（实验）" if self._engine() == "ANR" else tr('一键启用插帧'))
+        if hasattr(self, "btn_restore"):
+            self.btn_restore.setText("还原 ANR" if self._engine() == "ANR" else tr('一键恢复'))
+            model = self.cmb_anr_mult.model()
+            for i in range(self.cmb_anr_mult.count()):
+                item = model.item(i) if hasattr(model, "item") else None
+                if item is not None:
+                    item.setEnabled(True)
 
     def do_anr_deploy(self) -> None:
         """把 ANR 平铺部署到当前游戏（先备份同名文件，记录进 state）。"""
@@ -3223,7 +3258,7 @@ class MainWindow(QWidget):
         profile = anr_profile.AnrProfile(
             path=self.cmb_anr_path.currentData() or anr_profile.DEFAULT_PATH,
             max_generated=anr_profile.mult_to_max_generated(
-                anr_profile.MULT_MIN + max(0, self.seg_anr_mult.value())),
+                int(self.cmb_anr_mult.currentData() or anr_profile.MULT_MIN)),
             scene_cut=self.sw_anr_cut.isChecked(),
             nits_per_unit=nits,
         ).normalized()
