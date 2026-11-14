@@ -1449,6 +1449,7 @@ class MainWindow(QWidget):
         self._start_auto_update_check()
         if self.shot_mode:
             QTimer.singleShot(0, self.start_scan)
+        self._restore_engine_mode()
         self._try_end_splash()
 
     def _start_auto_update_check(self) -> None:
@@ -1636,6 +1637,12 @@ class MainWindow(QWidget):
         ttl.addWidget(s)
         lay.addLayout(ttl)
         lay.addStretch(1)
+
+        # 插帧方案切换：标题栏一个开关切 DLSS-G ↔ ANR FG（整界面模式，不只下拉里一项）
+        self.seg_mode = Segmented(["DLSS-G", "ANR FG"], 0)
+        self.seg_mode.setToolTip("切换插帧方案：DLSS-G（NVIDIA 路线）或 ANR FG（Apex，实验）")
+        self.seg_mode.changed.connect(self._on_mode_switch)
+        lay.addWidget(self.seg_mode, 0, Qt.AlignVCenter)
 
         # 语言切换：选项永远用各自语言的原生名字显示（英语就写 English）
         self.lang_sel = Combo()
@@ -2926,6 +2933,31 @@ class MainWindow(QWidget):
         rt = self.cmb_runtime.currentData() if hasattr(self, "cmb_runtime") else ""
         return rt or core.DEFAULT_RUNTIME
 
+    def _on_mode_switch(self, index: int) -> None:
+        """标题栏开关：DLSS-G ↔ ANR FG。"""
+        engine = "ANR" if index == 1 else "DLSS"
+        idx = self.cmb_engine.findData(engine) if hasattr(self, "cmb_engine") else -1
+        if idx >= 0 and self.cmb_engine.currentIndex() != idx:
+            self.cmb_engine.setCurrentIndex(idx)      # 触发 _on_engine_changed / _sync_engine_mode
+        else:
+            self._sync_engine_mode()
+        state = core.load_state()
+        state.setdefault("settings", {})["engine_mode"] = engine
+        try:
+            core.save_state(state)
+        except Exception:
+            pass
+        self._log(f"[提示] 插帧方案已切换为 {'ANR FG' if engine == 'ANR' else 'DLSS-G'}")
+
+    def _restore_engine_mode(self) -> None:
+        """启动时恢复上次选的插帧方案。"""
+        try:
+            saved = (core.load_state().get("settings") or {}).get("engine_mode", "DLSS")
+        except Exception:
+            saved = "DLSS"
+        if saved == "ANR":
+            self._on_mode_switch(1)
+
     def _animate_row(self, widget, show: bool) -> None:
         """切换引擎时的高度滑动动画（0 ↔ 自然高度）。"""
         if widget is None:
@@ -2972,6 +3004,12 @@ class MainWindow(QWidget):
                 widget.setVisible(show)
                 widget.setMaximumHeight(16777215)
 
+        if hasattr(self, "seg_mode"):
+            self.seg_mode.blockSignals(True)
+            try:
+                self.seg_mode.set_value(1 if is_anr else 0)
+            finally:
+                self.seg_mode.blockSignals(False)
         if hasattr(self, "btn_install"):
             self.btn_install.setText("部署 ANR（实验）" if is_anr else tr('一键启用插帧'))
         if hasattr(self, "btn_restore"):

@@ -122,6 +122,29 @@ def main() -> int:
         if "ANR" in win.btn_install.text():
             fails.append(f"切回 DLSS 后主按钮文案没复位: {win.btn_install.text()!r}")
 
+    # 标题栏开关：DLSS-G ↔ ANR FG
+    if not hasattr(win, "seg_mode"):
+        fails.append("标题栏没有 DLSS-G / ANR FG 切换开关")
+    else:
+        win.seg_mode.set_value(1)
+        app.processEvents()
+        win._sync_engine_mode(animate=False)
+        app.processEvents()
+        if win._engine() != "ANR":
+            fails.append(f"标题栏切到 ANR 后引擎是 {win._engine()!r}")
+        if win.row_preset.isVisibleTo(win):
+            fails.append("标题栏切到 ANR 后预设行应收起")
+        if "ANR" not in win.btn_restore.text():
+            fails.append("标题栏切到 ANR 后恢复按钮文案不对")
+        win.seg_mode.set_value(0)
+        app.processEvents()
+        win._sync_engine_mode(animate=False)
+        app.processEvents()
+        if win._engine() != "DLSS":
+            fails.append(f"标题栏切回 DLSS 后引擎是 {win._engine()!r}")
+        if not win.row_preset.isVisibleTo(win):
+            fails.append("标题栏切回 DLSS 后预设行应展开")
+
     # 截图（回到有 ANR 的那个游戏）
     win.select("anr")
     win.resize(1280, 900)
