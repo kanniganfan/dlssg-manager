@@ -24,6 +24,50 @@ PROXY_INI = "dlssg_sm86.ini"
 PROXY_RUNTIME = Path("dlssg_sm86") / "runtime"
 
 
+STREAMLINE_REL = Path("Engine") / "Plugins" / "Runtime" / "Nvidia" / "StreamlineCore" / "Binaries" / "ThirdParty" / "Win64"
+STREAMLINE_DLL = "nvngx_dlssg.dll"
+
+
+def find_layout(game_dir) -> tuple[str, Path]:
+    r"""找出「游戏真正加载 nvngx_dlssg.dll 的位置」，返回 (布局名, 相对游戏根的目录)。
+
+    实测 Phantom Blade Zero：
+    · exe 目录里平铺 nvngx_dlssg.dll → 游戏完全不加载（没有任何日志）
+    · 游戏真正用的是 UE5 Streamline 插件目录里的那份：
+      Engine\Plugins\Runtime\Nvidia\StreamlineCore\Binaries\ThirdParty\Win64\nvngx_dlssg.dll
+    所以优先替换那个槽位；其次才考虑我们自己的代理（dlssg_sm86\runtime\），最后才是平铺。
+    """
+    base = Path(game_dir)
+    here = base
+    for _ in range(5):                      # 往上最多找 5 层，覆盖 platform\steam → 游戏根
+        slot = here / STREAMLINE_REL
+        if (slot / STREAMLINE_DLL).is_file():
+            try:
+                return "streamline", slot.relative_to(base)
+            except ValueError:
+                return "streamline", slot
+        if here.parent == here:
+            break
+        here = here.parent
+    if (base / PROXY_INI).is_file() and (base / PROXY_RUNTIME).is_dir():
+        return "proxy", PROXY_RUNTIME
+    return "flat", Path("")
+
+
+def _copy(src, dst, tries: int = 20) -> None:
+    """复制文件；被占用（杀软扫描 / 游戏还在跑）时重试几次，最后给一句人话。"""
+    for attempt in range(tries):
+        try:
+            shutil.copy2(src, dst)
+            return
+        except PermissionError as exc:
+            if attempt == tries - 1:
+                raise RuntimeError(
+                    f"文件被占用，复制失败：{Path(dst).name} —— 请先完全退出游戏再试"
+                ) from exc
+            time.sleep(0.25)
+
+
 def detect_layout(game_dir) -> str:
     """选部署位置。
 
@@ -46,14 +90,14 @@ def sha256_file(path) -> str:
     return h.hexdigest()
 
 
-def plan(plugin_dir, layout: str = "flat") -> list[tuple[Path, Path]]:
+def plan(plugin_dir, root: Path = Path("")) -> list[tuple[Path, Path]]:
     """(源文件, 游戏目录里的相对路径)。
 
     ANR 的所有资源都必须和它的 DLL 同级（它用 GetModuleFileName 按自身目录找），
     所以换布局时是整体搬一个文件夹，而不是只换 DLL 的位置。
     """
     base = Path(plugin_dir)
-    root = PROXY_RUNTIME if layout == "proxy" else Path("")
+    root = Path(root)
     pairs: list[tuple[Path, Path]] = [(base / MAIN_DLL, root / MAIN_DLL)]
     for name in anr.SUPPORT_FILES:
         pairs.append((base / name, root / name))
@@ -75,17 +119,20 @@ def deploy(game_dir, plugin_dir, backup_root) -> dict:
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     backup_dir = Path(backup_root) / f"anr-{stamp}"
-    layout = detect_layout(base)
-    record: dict = {"layout": layout, "installed_at": int(time.time()),
+    layout, root = find_layout(base)
+    record: dict = {"layout": layout, "root": root.as_posix(), "installed_at": int(time.time()),
                     "backup_dir": str(backup_dir), "files": [], "backups": {}}
 
-    for src, rel in plan(plugin_dir, layout):
+    for src, rel in plan(plugin_dir, root):
         dst = base / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists():
-            backup = backup_dir / rel
+            # rel 可能是绝对路径（Streamline 槽位在 exe 目录之外），
+            # 直接 backup_dir / 绝对路径 会得到它自己 —— 那会把文件复制到自己身上。
+            backup_rel = rel if not rel.is_absolute() else Path(*rel.parts[1:])
+            backup = backup_dir / backup_rel
             backup.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(dst, backup)
+            _copy(dst, backup)
             record["backups"][rel.as_posix()] = str(backup)
         shutil.copy2(src, dst)
         record["files"].append({"path": rel.as_posix(), "sha256": sha256_file(dst)})
@@ -107,19 +154,24 @@ def restore(game_dir, record) -> list[str]:
         dst.unlink()
         log.append(f"删除 {item['path']}")
 
-    for root in (base, base / PROXY_RUNTIME):
+    roots = [base, base / PROXY_RUNTIME, base / str(record.get("root") or "")]
+    for root in {r for r in roots}:
         for name in anr.SUPPORT_DIRS:
             folder = root / name
             if folder.is_dir() and not any(p.is_file() for p in folder.rglob("*")):
                 shutil.rmtree(folder, ignore_errors=True)
-                log.append(f"删除空目录 {folder.relative_to(base)}/")
+                try:
+                    shown = folder.relative_to(base)
+                except ValueError:
+                    shown = folder          # Streamline 槽位在 exe 目录之外
+                log.append(f"删除空目录 {shown}/")
 
     for rel, backup in record.get("backups", {}).items():
         src = Path(backup)
         dst = base / rel
         if src.is_file():
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
+            _copy(src, dst)
             log.append(f"还原 {rel}")
 
     return log

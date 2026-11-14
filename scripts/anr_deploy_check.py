@@ -131,6 +131,35 @@ def main() -> int:
         if (runtime / "path_table.json").exists():
             fails.append("还原后 dlssg_sm86\\runtime 里还留着 ANR 的文件")
 
+    # UE5 Streamline 目录里有 nvngx_dlssg.dll 时，必须替换那一份（游戏真正加载的）
+    with tempfile.TemporaryDirectory(prefix="anr_sl_", dir=BUILD) as temp:
+        game = Path(temp) / "Game"
+        exe_dir = game / "platform" / "steam"
+        exe_dir.mkdir(parents=True)
+        (exe_dir / "Game.exe").write_bytes(b"MZ")
+        slot = (game / "Engine" / "Plugins" / "Runtime" / "Nvidia" / "StreamlineCore"
+                / "Binaries" / "ThirdParty" / "Win64")
+        slot.mkdir(parents=True)
+        (slot / "nvngx_dlssg.dll").write_bytes(b"NVIDIA-ORIGINAL")
+        (slot / "sl.dlss_g.dll").write_bytes(b"SL")
+
+        rec = anr_deploy.deploy(exe_dir, source, Path(temp) / "backups")
+        if rec.get("layout") != "streamline":
+            fails.append(f"应选 streamline 布局，得到 {rec.get('layout')}")
+        if not (slot / "path_table.json").is_file():
+            fails.append("streamline 布局下资源没进 Streamline 目录")
+        if (exe_dir / "path_table.json").exists():
+            fails.append("streamline 布局下不该往 exe 目录铺")
+        if (slot / "nvngx_dlssg.dll").read_bytes() == b"NVIDIA-ORIGINAL":
+            fails.append("streamline 布局下没替换原厂 DLL")
+        if (slot / "sl.dlss_g.dll").read_bytes() != b"SL":
+            fails.append("不该动 sl.dlss_g.dll")
+        anr_deploy.restore(exe_dir, rec)
+        if (slot / "nvngx_dlssg.dll").read_bytes() != b"NVIDIA-ORIGINAL":
+            fails.append("还原后原厂 DLL 没回来")
+        if (slot / "path_table.json").exists():
+            fails.append("还原后 Streamline 目录里还留着 ANR 文件")
+
     if fails:
         for line in fails:
             print("FAIL:", line)
