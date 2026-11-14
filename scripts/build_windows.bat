@@ -50,7 +50,8 @@ echo [3/4] 源码自检...
 
 echo [4/4] PyInstaller 打包...
 "%PY%" -m PyInstaller --noconfirm --clean --onefile --windowed ^
-    --name "DLSSG Manager" ^
+    --uac-admin ^
+--name "DLSSG Manager" ^
     --icon "%CD%\assets\icon.ico" ^
     --add-data "%CD%\lang;lang" ^
     --distpath "%DIST_DIR%" --workpath "%BUILD_DIR%\work" --specpath "%BUILD_DIR%\spec" src\main.py || goto :err
