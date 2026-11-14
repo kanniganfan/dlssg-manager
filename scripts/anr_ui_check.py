@@ -151,6 +151,23 @@ def main() -> int:
         if not win.row_preset.isVisibleTo(win):
             fails.append("标题栏切回 DLSS 后预设行应展开")
 
+    # 部署 → 「还原 ANR」必须从灰变可点；还原 → 再回到灰
+    win.cmb_engine.setCurrentIndex(win.cmb_engine.findData("ANR"))
+    win._sync_engine_mode(animate=False)
+    win.select("plain")
+    if win.btn_restore.isEnabled():
+        fails.append("未部署时「还原 ANR」不该可点")
+    win.do_anr_deploy()
+    app.processEvents()
+    if not win.btn_restore.isEnabled():
+        fails.append("部署 ANR 后「还原 ANR」仍然是灰的（识别不到部署）")
+    if "已部署" not in " ".join(p.text() if hasattr(p, "text") else "" for p in []):
+        pass
+    win.do_anr_restore()
+    app.processEvents()
+    if win.btn_restore.isEnabled():
+        fails.append("还原 ANR 后按钮应回到灰色")
+
     # 窄宽度自适应：提示文字必须换行，ANR 行不能超出视口
     if not win.lb_anr_note.wordWrap():
         fails.append("ANR 提示标签没开换行，窄窗口会撑破卡片")

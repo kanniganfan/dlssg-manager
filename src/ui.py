@@ -2880,6 +2880,8 @@ class MainWindow(QWidget):
         self.h_pills.addWidget(Pill(tr('支持帧生成'), "info") if g.dlssg else Pill(tr('未检测到 DLSSG'), "muted"))
         if g.deployed:
             self.h_pills.addWidget(Pill(tr('已启用'), "ok"))
+        if self._anr_record(gid):
+            self.h_pills.addWidget(Pill("ANR 已部署", "ok"))
         if g.anticheat:
             self.h_pills.addWidget(Pill(tr('反作弊'), "warn"))
 
@@ -2938,7 +2940,7 @@ class MainWindow(QWidget):
         else:
             self.kv_state.set(tr('未部署'))
         self.btn_install.setText(tr('重新部署 / 更新配置') if g.deployed else tr('一键启用插帧'))
-        self.btn_restore.setEnabled(g.deployed or bool(g.entry))
+        self._sync_restore_button()
         self.stack.setCurrentIndex(1)
         # 切页/重建控件后立即整窗补绘：修复「进入页面后不交互就有文字被遮挡」
         QTimer.singleShot(0, self._repaint_all)
@@ -3050,6 +3052,7 @@ class MainWindow(QWidget):
             self.btn_install.setText("部署 ANR（实验）" if is_anr else tr('一键启用插帧'))
         if hasattr(self, "btn_restore"):
             self.btn_restore.setText("还原 ANR" if is_anr else tr('一键恢复'))
+        self._sync_restore_button()
         if is_anr and getattr(self, "detail_scroll", None) is not None:
             QTimer.singleShot(0, lambda: self.detail_scroll.ensureWidgetVisible(self.row_anr, 0, 28))
 
@@ -3220,6 +3223,8 @@ class MainWindow(QWidget):
             self._log(f"[错误] 保存部署记录失败：{exc}")
         self._log(f"[提示] 已部署 ANR 到 {game.exe_dir}（{len(record['files'])} 个文件）")
         self.toast_msg("ANR 已部署，进游戏开启帧生成试试", "ok")
+        self._refresh_current()
+        self._sync_restore_button()
 
     def do_anr_restore(self) -> None:
         """按记录还原 ANR 部署。"""
@@ -3245,6 +3250,8 @@ class MainWindow(QWidget):
         for line in log_lines[:12]:
             self._log(f"[ANR] {line}")
         self.toast_msg("ANR 已还原", "ok")
+        self._refresh_current()
+        self._sync_restore_button()
 
     def apply_anr(self) -> None:
         """把界面上的 ANR 设置写回游戏目录里的 nr_fg.ini。"""
@@ -3391,6 +3398,23 @@ class MainWindow(QWidget):
         else:
             self.status.setText(tr('恢复未完成'))
             self.toast_msg(tr('没有可恢复的部署或已被占用'), "warn")
+
+    def _anr_record(self, gid: str) -> dict:
+        try:
+            return (core.load_state().get("anr") or {}).get(gid) or {}
+        except Exception:
+            return {}
+
+    def _sync_restore_button(self) -> None:
+        """「一键恢复」是否可点：DLSS 看部署目录，ANR 看 state 里的部署记录。"""
+        g = self.current
+        if g is None or not hasattr(self, "btn_restore"):
+            return
+        if self._engine() == "ANR":
+            enabled = bool(self._anr_record(g.gid))
+        else:
+            enabled = bool(g.deployed or g.entry)
+        self.btn_restore.setEnabled(enabled)
 
     def _refresh_current(self) -> None:
         g = self.current
