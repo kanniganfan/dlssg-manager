@@ -109,6 +109,12 @@ def main() -> int:
             fails.append("切到 ANR 后 DLSS-G 预设行应整行收起")
         if win.seg_mult.isVisibleTo(win):
             fails.append("切到 ANR 后插帧倍率应整行收起")
+        # ANR 任何显卡都能用、不要求驱动版本、不需要 DLSS 运行库 → 这些必须藏起来
+        for attr in ("gpu_pill", "kernel_pill", "hags_card", "mask_card",
+                     "lb_runtime", "cmb_runtime", "lb_entry", "cmb_entry"):
+            widget = getattr(win, attr, None)
+            if widget is not None and widget.isVisibleTo(win):
+                fails.append(f"切到 ANR 后 {attr} 应该隐藏")
 
         # 切回 DLSS：DLSS 行回来、按钮文案复位
         win.cmb_engine.setCurrentIndex(win.cmb_engine.findData("DLSS"))

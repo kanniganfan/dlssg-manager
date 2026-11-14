@@ -2071,8 +2071,10 @@ class MainWindow(QWidget):
         lay = QVBoxLayout(bar)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
-        lay.addWidget(self._build_hags_card())
-        lay.addWidget(self._build_mask_card())
+        self.hags_card = self._build_hags_card()
+        self.mask_card = self._build_mask_card()
+        lay.addWidget(self.hags_card)
+        lay.addWidget(self.mask_card)
         return bar
 
     def _build_hags_card(self) -> QWidget:
@@ -2378,7 +2380,7 @@ class MainWindow(QWidget):
         # 配置行 1：配套运行库 + 入口 DLL。用 FlowRow 而非 QHBoxLayout，
         # 窄宽时自动换行；下拉不再写死宽度，改为可伸缩（150~280）。
         r1 = FlowRow(h_spacing=10, v_spacing=6)
-        a = QLabel(tr('配套运行库'))
+        self.lb_runtime = a = QLabel(tr('配套运行库'))
         a.setObjectName("kv")
         a.setMinimumWidth(max(66, a.sizeHint().width()))
         r1.add(a)
@@ -2392,7 +2394,7 @@ class MainWindow(QWidget):
                '可在新版本无法进入游戏时回退。'))
         self.cmb_runtime.currentIndexChanged.connect(lambda _i: self._on_runtime_changed())
         r1.add(self.cmb_runtime)
-        b = QLabel(tr('入口 DLL'))
+        self.lb_entry = b = QLabel(tr('入口 DLL'))
         b.setObjectName("kv")
         b.setMinimumWidth(max(66, b.sizeHint().width()))
         r1.add(b)
@@ -2994,6 +2996,10 @@ class MainWindow(QWidget):
             (getattr(self, "row_tier", None), not is_anr),
             (getattr(self, "lb_mult", None), not is_anr),
             (getattr(self, "seg_mult", None), not is_anr),
+            (getattr(self, "lb_runtime", None), not is_anr),
+            (getattr(self, "cmb_runtime", None), not is_anr),
+            (getattr(self, "lb_entry", None), not is_anr),
+            (getattr(self, "cmb_entry", None), not is_anr),
         )
         for widget, show in rows:
             if widget is None:
@@ -3010,6 +3016,12 @@ class MainWindow(QWidget):
                 self.seg_mode.set_value(1 if is_anr else 0)
             finally:
                 self.seg_mode.blockSignals(False)
+        # DLSS-G 专用的整卡/状态点：ANR 任何显卡都能用、不要求驱动版本，也不需要运行库
+        for widget in (getattr(self, "gpu_pill", None), getattr(self, "kernel_pill", None),
+                       getattr(self, "hags_card", None), getattr(self, "mask_card", None)):
+            if widget is not None:
+                widget.setVisible(not is_anr)
+
         if hasattr(self, "btn_install"):
             self.btn_install.setText("部署 ANR（实验）" if is_anr else tr('一键启用插帧'))
         if hasattr(self, "btn_restore"):
@@ -3126,7 +3138,8 @@ class MainWindow(QWidget):
         except Exception:
             rec = None
         if install is None:
-            note = "ANR FG：尚未部署到本游戏；先用下方「部署 ANR（实验）」，再回来调参数。"
+            note = ("ANR FG：任何 NVIDIA / AMD / Intel 显卡都能用，不要求驱动版本，"
+                    "也不需要 DLSS 运行库；本游戏尚未部署，点下方「部署 ANR（实验）」即可。")
             self.lb_anr_note.setText(note + (f" 官方建议 {rec.text}。" if rec is not None else ""))
         elif rec is not None:
             self.lb_anr_note.setText(f"ANR FG：官方建议 {rec.text}；改完需重启游戏生效。")
