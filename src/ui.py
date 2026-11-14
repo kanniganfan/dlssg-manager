@@ -3421,7 +3421,11 @@ class MainWindow(QWidget):
         game = self.current
         if game is None:
             return
-        logs = anr_profile.find_logs(game.exe_dir)
+        record = self._anr_record(game.gid)
+        extra = []
+        if record.get("root"):
+            extra.append(Path(game.exe_dir) / str(record["root"]))
+        logs = anr_profile.find_logs(game.exe_dir, extra_dirs=extra)
         if not logs:
             self._log("[ANR] 还没找到 nr_fg-*.log —— 先进游戏跑一次，退出后再点这里")
             self.toast_msg("还没有 ANR 日志，先运行一次游戏", "info")

@@ -334,18 +334,19 @@ LOG_KEYWORDS = ("multiframe", "multiplier", "requested", "path", "max_generated"
                 "generated", "error", "fail", "unavailable", "dlssg", "presentation")
 
 
-def find_logs(game_dir, limit: int = 4) -> list[Path]:
-    """在游戏目录里找最新的 ANR 日志（最多递归两层，免得扫全盘）。"""
-    base = Path(game_dir)
+def find_logs(game_dir, limit: int = 4, extra_dirs=()) -> list[Path]:
+    """在游戏目录（以及部署记录里的槽位目录）找最新的 ANR 日志。"""
+    bases = [Path(game_dir)] + [Path(d) for d in extra_dirs]
     found: list[Path] = []
-    if not base.is_dir():
-        return found
-    for pattern in LOG_PATTERNS:
-        found.extend(base.glob(pattern))
-        for sub in ("anr_fg", "dlssg"):
-            folder = base / sub
-            if folder.is_dir():
-                found.extend(folder.rglob(pattern))
+    for base in bases:
+        if not base.is_dir():
+            continue
+        for pattern in LOG_PATTERNS:
+            found.extend(base.glob(pattern))
+            for sub in ("anr_fg", "dlssg"):
+                folder = base / sub
+                if folder.is_dir():
+                    found.extend(folder.rglob(pattern))
     logs = [f for f in found if f.is_file()]
     logs.sort(key=lambda f: f.stat().st_mtime, reverse=True)
     return logs[:limit]
