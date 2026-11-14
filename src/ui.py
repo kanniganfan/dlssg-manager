@@ -2604,6 +2604,14 @@ class MainWindow(QWidget):
         self.btn_restore.setMinimumHeight(34)
         self.btn_restore.clicked.connect(self.do_restore)
         actions.add(self.btn_restore)
+        self.btn_anr_log = QPushButton("读取 ANR 日志")
+        self.btn_anr_log.setObjectName("ghost")
+        self.btn_anr_log.setCursor(Qt.PointingHandCursor)
+        self.btn_anr_log.setMinimumHeight(34)
+        self.btn_anr_log.setToolTip("读游戏目录里的 nr_fg-*.log，看实际请求的倍率与卷积路径")
+        self.btn_anr_log.clicked.connect(self.read_anr_log)
+        actions.add(self.btn_anr_log)
+
         self.btn_open = QPushButton(tr('打开目录'))
         self.btn_open.setObjectName("ghost")
         self.btn_open.setCursor(Qt.PointingHandCursor)
@@ -3053,6 +3061,8 @@ class MainWindow(QWidget):
             if label.objectName() in ("optionHint", "tierHint"):
                 label.setVisible(not is_anr)
 
+        if hasattr(self, "btn_anr_log"):
+            self.btn_anr_log.setVisible(is_anr)
         if hasattr(self, "btn_install"):
             self.btn_install.setText("部署 ANR（实验）" if is_anr else tr('一键启用插帧'))
         if hasattr(self, "btn_restore"):
@@ -3403,6 +3413,22 @@ class MainWindow(QWidget):
         else:
             self.status.setText(tr('恢复未完成'))
             self.toast_msg(tr('没有可恢复的部署或已被占用'), "warn")
+
+    def read_anr_log(self) -> None:
+        """读 ANR 自己的运行日志：倍率、卷积路径、报错都在里面。"""
+        game = self.current
+        if game is None:
+            return
+        logs = anr_profile.find_logs(game.exe_dir)
+        if not logs:
+            self._log("[ANR] 还没找到 nr_fg-*.log —— 先进游戏跑一次，退出后再点这里")
+            self.toast_msg("还没有 ANR 日志，先运行一次游戏", "info")
+            return
+        for path in logs[:1]:
+            self._log(f"[ANR] 读取日志：{path}")
+            for line in anr_profile.summarize_log(path):
+                self._log(f"[ANR] {line}")
+        self.toast_msg(f"已读取 {logs[0].name}", "ok")
 
     def _anr_record(self, gid: str) -> dict:
         try:

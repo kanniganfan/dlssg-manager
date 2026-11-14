@@ -172,6 +172,24 @@ def main() -> int:
     if getattr(win.games[1], "anr_deployed", False):
         fails.append("还原后 anr_deployed 应清除")
 
+    # 日志读取：造一份 ANR 日志，确认能挑出倍率/路径行
+    fake_log = plain_dir / "nr_fg-20260101-120000.log"
+    fake_log.write_text(
+        "nr::Init: NVIDIA's DLSS-G through the NGX core 310.9 (initialized by the host): "
+        "FrameGeneration.Available true, init result 0, MultiFrameCountMax 6\n"
+        "nr::SelectPath: path=coopmat (auto, ampere)\n"
+        "game requested multiplier 2\n"
+        "perf: time_ms,requested_generator,host_generation_enabled\n", encoding="utf-8")
+    logs = anr_profile.find_logs(plain_dir)
+    if not logs or logs[0].name != fake_log.name:
+        fails.append(f"find_logs 没找到刚写的日志: {logs}")
+    picked = anr_profile.summarize_log(fake_log)
+    if not any("MultiFrameCountMax 6" in line for line in picked):
+        fails.append("summarize_log 没挑出 MultiFrameCountMax 行")
+    if not any("requested multiplier" in line for line in picked):
+        fails.append("summarize_log 没挑出游戏请求的倍率行")
+    win.read_anr_log()          # 不应抛异常
+
     # 窄宽度自适应：提示文字必须换行，ANR 行不能超出视口
     if not win.lb_anr_note.wordWrap():
         fails.append("ANR 提示标签没开换行，窄窗口会撑破卡片")

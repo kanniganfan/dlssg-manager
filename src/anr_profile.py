@@ -322,3 +322,41 @@ def recommend(plugin_dir, gpu_name: str, width: int, height: int) -> Recommendat
             return rec
         fallback = fallback or rec
     return fallback
+
+
+# ---------------------------------------------------------------- 运行日志（诊断用）
+# ANR 会写两种文件：nr_fg-*.log（文本，含 MultiFrameCountMax / multiplier / path 等）
+# 和每帧 CSV（time_ms,requested_generator,host_generation_enabled,...）。
+# 游戏设置里能选几倍，最终看它向 DLSS-G 请求的 multiplier —— 只能从这些日志里看到。
+
+LOG_PATTERNS = ("nr_fg*.log", "nr_fg*.csv")
+LOG_KEYWORDS = ("multiframe", "multiplier", "requested", "path", "max_generated",
+                "generated", "error", "fail", "unavailable", "dlssg", "presentation")
+
+
+def find_logs(game_dir, limit: int = 4) -> list[Path]:
+    """在游戏目录里找最新的 ANR 日志（最多递归两层，免得扫全盘）。"""
+    base = Path(game_dir)
+    found: list[Path] = []
+    if not base.is_dir():
+        return found
+    for pattern in LOG_PATTERNS:
+        found.extend(base.glob(pattern))
+        for sub in ("anr_fg", "dlssg"):
+            folder = base / sub
+            if folder.is_dir():
+                found.extend(folder.rglob(pattern))
+    logs = [f for f in found if f.is_file()]
+    logs.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    return logs[:limit]
+
+
+def summarize_log(path, max_lines: int = 40) -> list[str]:
+    """挑出日志里和「倍率 / 路径 / 报错」相关的行。"""
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    picked = [ln for ln in lines if any(k in ln.lower() for k in LOG_KEYWORDS)]
+    return (picked or lines)[-max_lines:]
