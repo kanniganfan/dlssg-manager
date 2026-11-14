@@ -2413,7 +2413,7 @@ class MainWindow(QWidget):
         self.cmb_engine.currentIndexChanged.connect(lambda _i: self._on_engine_changed())
         self.cmb_engine.currentIndexChanged.connect(lambda _i: self._sync_engine_mode())
         r2.add(self.cmb_engine)
-        c = QLabel(tr('插帧倍率'))
+        self.lb_mult = c = QLabel(tr('插帧倍率'))
         c.setObjectName("kv")
         c.setMinimumWidth(max(66, c.sizeHint().width()))
         r2.add(c)
@@ -2429,7 +2429,7 @@ class MainWindow(QWidget):
         r2.add(self.sw_log)
         cl.addWidget(r2)
 
-        r_engine = FlowRow(h_spacing=10, v_spacing=6)
+        self.row_preset = r_engine = FlowRow(h_spacing=10, v_spacing=6)
         preset_label = QLabel(tr('DLSS-G预设'))
         preset_label.setObjectName("kv")
         preset_label.setToolTip(tr('预设只影响 NVIDIA DLSS-G 插帧引擎。'))
@@ -2488,7 +2488,7 @@ class MainWindow(QWidget):
         # 说明文字单独占一整行（不放在 FlowRow 里）—— 放进 FlowRow 时它只能拿到
         # 剩余宽度，中英文都会折成 3 行且断在「（不再 / 是逐位一致」这种词中间，
         # 既不美观也难读。整行铺满后中英文都只占 1~2 行。
-        r3 = FlowRow(h_spacing=10, v_spacing=6)
+        self.row_tier = r3 = FlowRow(h_spacing=10, v_spacing=6)
         d = QLabel(tr('一致性档位'))
         d.setObjectName("kv")
         d.setMinimumWidth(max(66, d.sizeHint().width()))
@@ -2576,23 +2576,6 @@ class MainWindow(QWidget):
         self.btn_restore.setMinimumHeight(34)
         self.btn_restore.clicked.connect(self.do_restore)
         actions.add(self.btn_restore)
-        self.btn_anr_deploy = QPushButton("部署 ANR（实验）")
-        self.btn_anr_deploy.setObjectName("ghost")
-        self.btn_anr_deploy.setCursor(Qt.PointingHandCursor)
-        self.btn_anr_deploy.setMinimumHeight(34)
-        self.btn_anr_deploy.setToolTip("把 ANR FG 平铺部署进该游戏目录（会先备份同名文件）")
-        self.btn_anr_deploy.clicked.connect(self.do_anr_deploy)
-        actions.add(self.btn_anr_deploy)
-        self.btn_anr_restore = QPushButton("还原 ANR")
-        self.btn_anr_restore.setObjectName("ghost")
-        self.btn_anr_restore.setCursor(Qt.PointingHandCursor)
-        self.btn_anr_restore.setMinimumHeight(34)
-        self.btn_anr_restore.clicked.connect(self.do_anr_restore)
-        actions.add(self.btn_anr_restore)
-        has_anr_source = anr_deploy.default_source_dir(Path(__file__).resolve().parents[1]) is not None
-        self.btn_anr_deploy.setVisible(has_anr_source)
-        self.btn_anr_restore.setVisible(has_anr_source)
-
         self.btn_open = QPushButton(tr('打开目录'))
         self.btn_open.setObjectName("ghost")
         self.btn_open.setCursor(Qt.PointingHandCursor)
@@ -2943,24 +2926,58 @@ class MainWindow(QWidget):
         rt = self.cmb_runtime.currentData() if hasattr(self, "cmb_runtime") else ""
         return rt or core.DEFAULT_RUNTIME
 
-    def _sync_engine_mode(self) -> None:
-        """切到 ANR 时把 DLSS-G 专属控件灰掉，主按钮改成部署 ANR。"""
+    def _animate_row(self, widget, show: bool) -> None:
+        """切换引擎时的高度滑动动画（0 ↔ 自然高度）。"""
+        if widget is None:
+            return
+        start = 0 if show else widget.height()
+        end = widget.sizeHint().height() if show else 0
+        if end <= 0:
+            widget.setVisible(show)
+            widget.setMaximumHeight(16777215)
+            return
+        widget.setVisible(True)
+        widget.setMaximumHeight(start)
+        anim = QPropertyAnimation(widget, b"maximumHeight", self)
+        anim.setDuration(170)
+        anim.setStartValue(start)
+        anim.setEndValue(end)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        if show:
+            anim.finished.connect(lambda: widget.setMaximumHeight(16777215))
+        else:
+            anim.finished.connect(widget.hide)
+        anim.start()
+        keep = getattr(self, "_mode_anims", [])
+        keep.append(anim)
+        self._mode_anims = keep[-8:]
+
+    def _sync_engine_mode(self, animate: bool = True) -> None:
+        """引擎切换：ANR 模式下把 DLSS-G 专属控件整行收起，换成一键部署/还原 ANR。"""
         is_anr = self._engine() == "ANR"
-        for attr in ("cmb_runtime", "cmb_entry", "seg_tier"):
-            widget = getattr(self, attr, None)
-            if widget is not None:
-                widget.setEnabled(not is_anr)
-        label = getattr(self, "lb_tier", None)
-        if label is not None:
-            label.setEnabled(not is_anr)
-        seg_mult = getattr(self, "seg_mult", None)
-        if seg_mult is not None:
-            seg_mult.setEnabled(not is_anr)
-        button = getattr(self, "btn_install", None)
-        if button is not None:
-            button.setText("部署 ANR（实验）" if is_anr else tr('一键启用插帧'))
-        if getattr(self, "current", None) is not None:
-            self._sync_anr_block(self.current)
+        self._sync_anr_block(getattr(self, "current", None))
+
+        rows = (
+            (getattr(self, "row_preset", None), not is_anr),
+            (getattr(self, "row_tier", None), not is_anr),
+            (getattr(self, "lb_mult", None), not is_anr),
+            (getattr(self, "seg_mult", None), not is_anr),
+        )
+        for widget, show in rows:
+            if widget is None:
+                continue
+            if animate:
+                self._animate_row(widget, show)
+            else:
+                widget.setVisible(show)
+                widget.setMaximumHeight(16777215)
+
+        if hasattr(self, "btn_install"):
+            self.btn_install.setText("部署 ANR（实验）" if is_anr else tr('一键启用插帧'))
+        if hasattr(self, "btn_restore"):
+            self.btn_restore.setText("还原 ANR" if is_anr else tr('一键恢复'))
+        if is_anr and getattr(self, "detail_scroll", None) is not None:
+            QTimer.singleShot(0, lambda: self.detail_scroll.ensureWidgetVisible(self.row_anr, 0, 28))
 
     def _engine(self) -> str:
         if core.runtime_is_legacy(self._runtime()):
@@ -3263,6 +3280,9 @@ class MainWindow(QWidget):
             self.toast_msg(tr('部署失败，详见日志'), "bad")
 
     def do_restore(self) -> None:
+        if self._engine() == "ANR":
+            self.do_anr_restore()
+            return
         g = self.current
         if not g:
             return

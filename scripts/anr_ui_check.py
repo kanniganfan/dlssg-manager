@@ -97,14 +97,30 @@ def main() -> int:
     else:
         win.cmb_engine.setCurrentIndex(idx)
         app.processEvents()
-        win._sync_engine_mode()
+        win._sync_engine_mode(animate=False)
         app.processEvents()
         if not win.row_anr.isVisibleTo(win):
             fails.append("切到 ANR 后 ANR 区块没显示")
         if "ANR" not in win.btn_install.text():
             fails.append(f"切到 ANR 后主按钮没改名: {win.btn_install.text()!r}")
-        if win.cmb_preset.isEnabled():
-            fails.append("切到 ANR 后 DLSS-G 预设应被灰掉")
+        if "ANR" not in win.btn_restore.text():
+            fails.append(f"切到 ANR 后恢复按钮没改名: {win.btn_restore.text()!r}")
+        if win.row_preset.isVisibleTo(win):
+            fails.append("切到 ANR 后 DLSS-G 预设行应整行收起")
+        if win.seg_mult.isVisibleTo(win):
+            fails.append("切到 ANR 后插帧倍率应整行收起")
+
+        # 切回 DLSS：DLSS 行回来、按钮文案复位
+        win.cmb_engine.setCurrentIndex(win.cmb_engine.findData("DLSS"))
+        app.processEvents()
+        win._sync_engine_mode(animate=False)
+        app.processEvents()
+        if not win.row_preset.isVisibleTo(win):
+            fails.append("切回 DLSS 后预设行没回来")
+        if not win.seg_mult.isVisibleTo(win):
+            fails.append("切回 DLSS 后倍率没回来")
+        if "ANR" in win.btn_install.text():
+            fails.append(f"切回 DLSS 后主按钮文案没复位: {win.btn_install.text()!r}")
 
     # 截图（回到有 ANR 的那个游戏）
     win.select("anr")
