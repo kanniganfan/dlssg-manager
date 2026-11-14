@@ -20,6 +20,22 @@ from pathlib import Path
 import anr_profile as anr
 
 MAIN_DLL = "nvngx_dlssg.dll"
+PROXY_INI = "dlssg_sm86.ini"
+PROXY_RUNTIME = Path("dlssg_sm86") / "runtime"
+
+
+def detect_layout(game_dir) -> str:
+    """选部署位置。
+
+    - proxy：游戏里已经有本工具的代理（dlssg_sm86.ini + dlssg_sm86\runtime\）。
+      这时游戏加载 nvngx_dlssg.dll 是从 dlssg_sm86\runtime\ 走的，ANR 必须放到那里，
+      否则游戏根本看不到它（实测：平铺到 exe 根目录 + 代理存在 = 永远不加载）。
+    - flat：没有代理，直接平铺到 exe 根目录。
+    """
+    base = Path(game_dir)
+    if (base / PROXY_INI).is_file() and (base / PROXY_RUNTIME).is_dir():
+        return "proxy"
+    return "flat"
 
 
 def sha256_file(path) -> str:
@@ -30,16 +46,21 @@ def sha256_file(path) -> str:
     return h.hexdigest()
 
 
-def plan(plugin_dir) -> list[tuple[Path, Path]]:
-    """(源文件, 游戏目录里的相对路径)。DLL 与全部资源都平铺到游戏根。"""
+def plan(plugin_dir, layout: str = "flat") -> list[tuple[Path, Path]]:
+    """(源文件, 游戏目录里的相对路径)。
+
+    ANR 的所有资源都必须和它的 DLL 同级（它用 GetModuleFileName 按自身目录找），
+    所以换布局时是整体搬一个文件夹，而不是只换 DLL 的位置。
+    """
     base = Path(plugin_dir)
-    pairs: list[tuple[Path, Path]] = [(base / MAIN_DLL, Path(MAIN_DLL))]
+    root = PROXY_RUNTIME if layout == "proxy" else Path("")
+    pairs: list[tuple[Path, Path]] = [(base / MAIN_DLL, root / MAIN_DLL)]
     for name in anr.SUPPORT_FILES:
-        pairs.append((base / name, Path(name)))
+        pairs.append((base / name, root / name))
     for name in anr.SUPPORT_DIRS:
         for f in sorted((base / name).rglob("*")):
             if f.is_file():
-                pairs.append((f, f.relative_to(base)))
+                pairs.append((f, root / f.relative_to(base)))
     return pairs
 
 
@@ -54,10 +75,11 @@ def deploy(game_dir, plugin_dir, backup_root) -> dict:
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     backup_dir = Path(backup_root) / f"anr-{stamp}"
-    record: dict = {"layout": "flat", "installed_at": int(time.time()),
+    layout = detect_layout(base)
+    record: dict = {"layout": layout, "installed_at": int(time.time()),
                     "backup_dir": str(backup_dir), "files": [], "backups": {}}
 
-    for src, rel in plan(plugin_dir):
+    for src, rel in plan(plugin_dir, layout):
         dst = base / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         if dst.exists():
@@ -85,11 +107,12 @@ def restore(game_dir, record) -> list[str]:
         dst.unlink()
         log.append(f"删除 {item['path']}")
 
-    for name in anr.SUPPORT_DIRS:
-        folder = base / name
-        if folder.is_dir() and not any(p.is_file() for p in folder.rglob("*")):
-            shutil.rmtree(folder, ignore_errors=True)
-            log.append(f"删除空目录 {name}/")
+    for root in (base, base / PROXY_RUNTIME):
+        for name in anr.SUPPORT_DIRS:
+            folder = root / name
+            if folder.is_dir() and not any(p.is_file() for p in folder.rglob("*")):
+                shutil.rmtree(folder, ignore_errors=True)
+                log.append(f"删除空目录 {folder.relative_to(base)}/")
 
     for rel, backup in record.get("backups", {}).items():
         src = Path(backup)

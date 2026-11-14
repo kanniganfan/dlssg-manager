@@ -103,6 +103,34 @@ def main() -> int:
         if not any("跳过（已被改动）" in line for line in log):
             fails.append("日志里应提示跳过被改动的文件")
 
+    # 有代理（dlssg_sm86.ini + dlssg_sm86\runtime\）时必须装进 runtime 目录，
+    # 否则游戏根本不会加载（实测 Phantom Blade Zero 就是这样）
+    with tempfile.TemporaryDirectory(prefix="anr_proxy_", dir=BUILD) as temp:
+        game = Path(temp) / "Game"
+        game.mkdir()
+        (game / "dlssg_sm86.ini").write_text("[Runtime]\nMode=Bundled\n", encoding="utf-8")
+        runtime = game / "dlssg_sm86" / "runtime"
+        runtime.mkdir(parents=True)
+        (runtime / "nvngx_dlssg.dll").write_bytes(b"OLD-RUNTIME")
+
+        rec = anr_deploy.deploy(game, source, Path(temp) / "backups")
+        if rec.get("layout") != "proxy":
+            fails.append(f"有代理时应选 proxy 布局，得到 {rec.get('layout')}")
+        if not (runtime / "path_table.json").is_file():
+            fails.append("proxy 布局下 path_table.json 没进 dlssg_sm86\\runtime")
+        if (game / "path_table.json").exists():
+            fails.append("proxy 布局下不该往 exe 根目录铺资源")
+        if (runtime / "nvngx_dlssg.dll").read_bytes() == b"OLD-RUNTIME":
+            fails.append("proxy 布局下没替换 runtime 里的 nvngx_dlssg.dll")
+        if "dlssg_sm86/runtime/nvngx_dlssg.dll" not in (rec.get("backups") or {}):
+            fails.append("替换代理运行库前没备份")
+
+        anr_deploy.restore(game, rec)
+        if (runtime / "nvngx_dlssg.dll").read_bytes() != b"OLD-RUNTIME":
+            fails.append("还原后代理运行库没回来")
+        if (runtime / "path_table.json").exists():
+            fails.append("还原后 dlssg_sm86\\runtime 里还留着 ANR 的文件")
+
     if fails:
         for line in fails:
             print("FAIL:", line)

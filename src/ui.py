@@ -3236,7 +3236,9 @@ class MainWindow(QWidget):
             core.save_state(state)
         except Exception as exc:
             self._log(f"[错误] 保存部署记录失败：{exc}")
-        self._log(f"[提示] 已部署 ANR 到 {game.exe_dir}（{len(record['files'])} 个文件）")
+        where = ("dlssg_sm86\\runtime（走现有代理）" if record.get("layout") == "proxy"
+                 else "exe 所在目录")
+        self._log(f"[提示] 已部署 ANR 到 {where}：{len(record['files'])} 个文件")
         self.toast_msg("ANR 已部署，进游戏开启帧生成试试", "ok")
         self._refresh_current()
         self._sync_restore_button()
